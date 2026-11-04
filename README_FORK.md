@@ -251,5 +251,5 @@ names, big libraries, Live Photos, the look at all albums after a real change an
 
 The fast path ("Fast path for new photos") was also written without a compiler on hand. Its decision file is covered by the CI
 self-test; the Photos glue only compiled. Not run on a phone: what `PHPersistentChange` really lists for a new photo (photos, albums,
-smart albums), the lookup of the albums a changed photo is in (`fetchAssetCollections(containing:)`), the fetch narrowed to the
+smart albums), the lookup of the albums a changed photo is in (`PHAssetCollection.fetchAssetCollectionsContaining`), the fetch narrowed to the
 changed photos, the fallback rules and the timing (the log line shows it).

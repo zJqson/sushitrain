@@ -802,7 +802,7 @@ enum PhotoBackupProgress {
 		var inNoAlbum = Set<String>()
 		changed.enumerateObjects { asset, _, _ in
 			var inSomeAlbum = false
-			let containing = PHAssetCollection.fetchAssetCollections(containing: asset, with: .album, options: nil)
+			let containing = PHAssetCollection.fetchAssetCollectionsContaining(asset, with: .album, options: nil)
 			containing.enumerateObjects { collection, _, _ in
 				if isBackedUpAlbum(collection) {
 					idsPerAlbum[collection.localIdentifier, default: []].insert(asset.localIdentifier)
