@@ -119,10 +119,10 @@ album (the folder hierarchy is not copied; same names get ` (2)`); this was not 
   hidden and ignored (a photo can be in several albums), and so are "Save photo adjustment data (AAE)", the time-zone setting and
   "Live photo file extension" (the Live Photo video is always `<same name>.MOV`). A file that is already in the folder, or that you
   deleted there on purpose (Syncthing knows), is not saved again. "Re-copy all photos" saves everything again to the same names.
-- **Still used:** the photo/live/video switches, "Path in folder", "Do not save photos older than six months" (**on by default**:
-  switch it off if you want every photo, however old; in this mode a photo that was saved once is remembered for good by the
-  ledger, so switching it off does not bring deleted photos back), "Save all photos in a burst", and all background and
-  automatic settings.
+- **Still used:** the photo/live/video switches, "Path in folder", "Do not save photos older than six months" (**off by default
+  in this fork**, so the first run saves every photo, however old; switch it on if you only want the last six months; in this
+  mode a photo that was saved once is remembered for good by the ledger, so a photo that you delete from the folder does not come
+  back), "Save all photos in a burst", and all background and automatic settings.
 
 Known limits:
 
@@ -152,7 +152,7 @@ First run, step by step:
 
 1. *Settings, Photo back-up*: *From album* = **Every album (one folder per album)**, *To folder* = the back-up folder (a
    send-and-receive or send-only folder; the picker only offers suitable ones).
-2. Switch **off** "Do not save photos older than six months" if you also want the older photos (it is on by default).
+2. "Do not save photos older than six months" is **off by default in this fork**: the first run saves every photo. Switch it on only if you want just the last six months.
 3. Press *Back-up new photos* on the Start screen (or wait: the app also starts by itself when a photo arrives) and keep the app
    open and the phone charging. The progress bar shows the album that is being saved.
 4. *Settings, Support, View log messages* has lines that start with `Album back-up:`: how many albums were found, how many files were

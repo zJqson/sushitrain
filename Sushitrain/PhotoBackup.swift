@@ -197,7 +197,9 @@ enum PhotoBackupProgress {
 	@AppStorage("photoBackupIncludeAAESidecars") var includeAAESidecars = false
 	@AppStorage("PhotoBackupFolderStructure") var folderStructure = PhotoBackupFolderStructure.byDateAndType
 	@AppStorage("photoSyncSubdirectoryPath") var subDirectoryPath = ""
-	@AppStorage("photoSyncMaxAgeDays") var maxAgeDays = 6 * 30  // The maximum age for assets to be considered for export
+	// The maximum age (in days) for assets to be considered for export; 0 = no limit.
+	// Fork: the default is NO limit, so the first run saves every photo (upstream: 6 * 30 = six months).
+	@AppStorage("photoSyncMaxAgeDays") var maxAgeDays = 0
 	@AppStorage("photoBackupTimeZone") var timeZone: PhotoBackupTimeZone = .current
 	@AppStorage("photoBackupLastSuccessfulChangeToken") var lastSuccessfullChangeTokenData: Data = Data()
 
