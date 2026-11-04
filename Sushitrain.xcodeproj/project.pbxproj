@@ -72,6 +72,7 @@
 		65EAD89C30712B5D0042B3CD /* FileImportCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EAD89A30712B5D0042B3CD /* FileImportCopy.swift */; };
 		65EAD89D30712B5D0042B3CD /* FileImportCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EAD89A30712B5D0042B3CD /* FileImportCopy.swift */; };
 		66A1F00000000000000000A2 /* BackgroundKeepAlive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66A1F00000000000000000A1 /* BackgroundKeepAlive.swift */; };
+		66A1F00000000000000000B2 /* AlbumFolderNaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66A1F00000000000000000B1 /* AlbumFolderNaming.swift */; };
 		65F15BFC2CA03CBE00E13DDD /* BackgroundManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F15BFB2CA03CBA00E13DDD /* BackgroundManager.swift */; };
 		65F15BFD2CA03DCE00E13DDD /* SushitrainCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 65AE125A2C3AB03E00E721D4 /* SushitrainCore.xcframework */; };
 		65F15C012CA06B2300E13DDD /* UploadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F15C002CA06B2100E13DDD /* UploadsView.swift */; };
@@ -184,6 +185,7 @@
 		65EAD89730712B520042B3CD /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		65EAD89A30712B5D0042B3CD /* FileImportCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileImportCopy.swift; sourceTree = "<group>"; };
 		66A1F00000000000000000A1 /* BackgroundKeepAlive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundKeepAlive.swift; sourceTree = "<group>"; };
+		66A1F00000000000000000B1 /* AlbumFolderNaming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumFolderNaming.swift; sourceTree = "<group>"; };
 		65F15BFB2CA03CBA00E13DDD /* BackgroundManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundManager.swift; sourceTree = "<group>"; };
 		65F15C002CA06B2100E13DDD /* UploadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadsView.swift; sourceTree = "<group>"; };
 		65F15C022CA1F85D00E13DDD /* SafariView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariView.swift; sourceTree = "<group>"; };
@@ -235,6 +237,7 @@
 				65AE11FC2C39EE0E00E721D4 /* App.swift */,
 				65AE12722C3B163000E721D4 /* AppState.swift */,
 				65AE12002C39EE0F00E721D4 /* Assets.xcassets */,
+				66A1F00000000000000000B1 /* AlbumFolderNaming.swift */,
 				66A1F00000000000000000A1 /* BackgroundKeepAlive.swift */,
 				65F15BFB2CA03CBA00E13DDD /* BackgroundManager.swift */,
 				65AF4C082D4FA46400A77899 /* ExternalSharing.swift */,
@@ -467,6 +470,7 @@
 			files = (
 				65361E6A2D18360F00BCC52C /* FileViewerView.swift in Sources */,
 				652763BB2C45C99200250D3C /* SettingsView.swift in Sources */,
+				66A1F00000000000000000B2 /* AlbumFolderNaming.swift in Sources */,
 				66A1F00000000000000000A2 /* BackgroundKeepAlive.swift in Sources */,
 				65F15BFC2CA03CBE00E13DDD /* BackgroundManager.swift in Sources */,
 				6505643D2CA98930009FFFB9 /* GridFilesView.swift in Sources */,

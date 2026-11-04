@@ -107,6 +107,8 @@ struct PhotoBackupSettingsView: View {
 		let selectedAlbumID = photoBackup.selectedAlbumID
 		return albums.contains { $0.localIdentifier == selectedAlbumID }
 			|| smartAlbums.contains { $0.localIdentifier == selectedAlbumID }
+			|| selectedAlbumID == PhotoBackup.allPhotosAlbumIdentifier
+			|| selectedAlbumID == PhotoBackup.everyAlbumIdentifier
 	}
 
 	var body: some View {
@@ -122,6 +124,7 @@ struct PhotoBackupSettingsView: View {
 			Section {
 				if authorizationStatus == .authorized {
 					Picker("From album", selection: $photoBackup.selectedAlbumID) {
+						Text("Every album (one folder per album)").tag(PhotoBackup.everyAlbumIdentifier)
 						Text("None").tag("")
 						Text("Camera roll").tag(PhotoBackup.allPhotosAlbumIdentifier)
 
@@ -177,9 +180,16 @@ struct PhotoBackupSettingsView: View {
 				Text("Copy photos")
 			} footer: {
 				if photoBackup.isReady {
-					Text(
-						"Photos from the selected album will be saved in the selected folder, in sub folders by creation date. If a photo with the same file name already exists in the folder, or has been deleted from the folder before, it will not be saved again."
-					)
+					if photoBackup.isEveryAlbum {
+						Text(
+							"Every album of your photo library is saved in its own folder inside the selected folder, named like the album. A photo that is in two albums is saved twice, once in each folder. Photos that are in no album go to the folder \"No album\". Photos that were saved before, or were deleted from the folder, are not saved again. Nothing is ever deleted from your phone."
+						)
+					}
+					else {
+						Text(
+							"Photos from the selected album will be saved in the selected folder, in sub folders by creation date. If a photo with the same file name already exists in the folder, or has been deleted from the folder before, it will not be saved again."
+						)
+					}
 				}
 			}
 
@@ -246,22 +256,32 @@ struct PhotoBackupSettingsView: View {
 					Text("Path in folder")
 				}
 
-				PhotoFolderStructureView(folderStructure: photoBackup.$folderStructure)
-					.disabled(photoBackup.isBackingUp)
-					.onChange(of: photoBackup.folderStructure) { _, _ in photoBackup.resetLastSuccessfulChangeToken() }
+				// "Every album" has its own layout (one folder per album); the date layouts are for the other sources
+				if !photoBackup.isEveryAlbum {
+					PhotoFolderStructureView(folderStructure: photoBackup.$folderStructure)
+						.disabled(photoBackup.isBackingUp)
+						.onChange(of: photoBackup.folderStructure) { _, _ in photoBackup.resetLastSuccessfulChangeToken() }
+				}
 
 				Text("Example file location in folder: ")
-					+ Text("\(photoBackup.subDirectoryPath)/\(photoBackup.folderStructure.examplePath)")
+					+ Text("\(photoBackup.subDirectoryPath)/\(photoBackup.effectiveFolderStructure.examplePath)")
 					.monospaced()
 
 			} footer: {
-				Text(
-					"When the folder structure is changed, photos that were already saved will be saved again in their new location."
-				)
+				if photoBackup.isEveryAlbum {
+					Text(
+						"If you rename an album, photos saved after that go to a folder with the new name. The folder with the old name and the photos in it stay where they are. A Live Photo is saved as the picture and, next to it, its video with the same name and the extension .MOV."
+					)
+				}
+				else {
+					Text(
+						"When the folder structure is changed, photos that were already saved will be saved again in their new location."
+					)
+				}
 			}
 
 			// Time zone settings
-			if photoBackup.folderStructure.usesTimeZone {
+			if photoBackup.effectiveFolderStructure.usesTimeZone {
 				Section {
 					PhotoBackupTimeZoneView(timeZone: photoBackup.$timeZone)
 						.disabled(photoBackup.isBackingUp)
@@ -271,7 +291,9 @@ struct PhotoBackupSettingsView: View {
 				}
 			}
 
-			// Add to album
+			// Add to album, and remove from source. Not in "Every album" mode: nothing is added to an album (it would become a folder
+			// of its own) and nothing is ever deleted from the phone, because a photo can be in several albums.
+			if !photoBackup.isEveryAlbum {
 			Section {
 				Picker("Add to album", selection: $photoBackup.savedAlbumID) {
 					Text("None").tag("")
@@ -331,6 +353,7 @@ struct PhotoBackupSettingsView: View {
 					}
 				#endif
 			}.disabled(photoBackup.isBackingUp || photoBackup.selectedAlbumID.isEmpty)
+			}
 
 			// Time limit
 			Section {
@@ -362,6 +385,8 @@ struct PhotoBackupSettingsView: View {
 				)
 			}
 
+			// Adjustment data and the Live Photo file name are fixed in "Every album" mode (see the footer of "Path in folder")
+			if !photoBackup.isEveryAlbum {
 			Section {
 				Toggle("Save photo adjustment data (AAE files)", isOn: photoBackup.$includeAAESidecars)
 					.disabled(photoBackup.isBackingUp || photoBackup.selectedAlbumID.isEmpty)
@@ -383,6 +408,7 @@ struct PhotoBackupSettingsView: View {
 				.pickerStyle(.menu)
 				.disabled(
 					photoBackup.isBackingUp || photoBackup.selectedAlbumID.isEmpty || !photoBackup.categories.contains(.livePhoto))
+			}
 			}
 
 			// Action buttons

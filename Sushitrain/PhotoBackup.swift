@@ -55,6 +55,10 @@ enum PhotoBackupFolderStructure: String, Codable {
 	case singleFolder = "singleFolder"
 	case singleFolderDatePrefixed = "singleFolderDatePrefixed"
 
+	// Fork: one folder per iPhone album (name = the album's name). It is not in the folder-structure picker: it is the layout
+	// that is used when the source "Every album" is chosen (see PhotoBackup.effectiveFolderStructure and AlbumFolderNaming.swift).
+	case byAlbumName = "byAlbumName"
+
 	var examplePath: String {
 		switch self {
 		case .byDate: return String(localized: "2024-08-11/IMG_2020.HEIC")
@@ -70,6 +74,7 @@ enum PhotoBackupFolderStructure: String, Codable {
 		case .byType: return String(localized: "Video/IMG_2020.MOV")
 		case .singleFolder: return String(localized: "IMG_2020.MOV")
 		case .singleFolderDatePrefixed: return String(localized: "2024-08-11_IMG_2020.MOV")
+		case .byAlbumName: return String(localized: "Holiday 2024/IMG_2020.HEIC")
 		}
 	}
 
@@ -78,7 +83,7 @@ enum PhotoBackupFolderStructure: String, Codable {
 		case .byDate, .byDateAndType, .byDateComponent, .byDateComponentAndType, .singleFolderDatePrefixed,
 			.byYear, .byYearMonth, .byYearAndType, .byYearMonthAndType, .byYearDashMonth, .byYearDashMonthAndType:
 			return true
-		case .byType, .singleFolder: return false
+		case .byType, .singleFolder, .byAlbumName: return false
 		}
 	}
 
@@ -96,7 +101,7 @@ enum PhotoBackupFolderStructure: String, Codable {
 		case .byYearDashMonth, .byYearDashMonthAndType:
 			return ["yyyy-MM"]
 
-		case .byType, .singleFolder, .byDate, .byDateAndType, .singleFolderDatePrefixed:
+		case .byType, .singleFolder, .byDate, .byDateAndType, .singleFolderDatePrefixed, .byAlbumName:
 			return []
 		}
 	}
@@ -169,6 +174,10 @@ enum PhotoBackupProgress {
 @MainActor class PhotoBackup: ObservableObject {
 	static nonisolated let allPhotosAlbumIdentifier = "_SUSHITRAIN_ALL_PHOTOS"
 
+	// Fork: the source "Every album (one folder per album)". Choosing it means: every user album of the Photos library becomes
+	// one folder with the album's name inside the destination folder (see AlbumFolderNaming.swift and README_FORK.md).
+	static nonisolated let everyAlbumIdentifier = "_PHOTOTRAIN_EVERY_ALBUM"
+
 	// These settings are prefixed 'photoSync' because that is what the feature used to be called
 	@AppStorage("photoSyncSelectedAlbumID") var selectedAlbumID: String = ""
 	@AppStorage("photoSyncFolderID") var selectedFolderID: String = ""
@@ -212,6 +221,14 @@ enum PhotoBackupProgress {
 
 	var isReady: Bool { return !self.selectedAlbumID.isEmpty && !self.selectedFolderID.isEmpty }
 
+	// Fork: "Every album" is chosen as the source
+	var isEveryAlbum: Bool { return self.selectedAlbumID == PhotoBackup.everyAlbumIdentifier }
+
+	// Fork: the layout that is really used. The date layout the user picked stays saved and comes back when another source is chosen.
+	var effectiveFolderStructure: PhotoBackupFolderStructure {
+		return self.isEveryAlbum ? PhotoBackupFolderStructure.byAlbumName : self.folderStructure
+	}
+
 	@MainActor func cancel() {
 		self.photoBackupTask?.cancel()
 		self.photoBackupTask = nil
@@ -228,6 +245,9 @@ enum PhotoBackupProgress {
 		let selectedFolderID = self.selectedFolderID
 		let categories = self.categories
 		let includeAllBurstAssets = self.includeAllBurstAssets
+		// Fork: album mode ("Every album"): the ledger of what was saved is valid for one destination (folder + path in it)
+		let everyAlbum = (selectedAlbumID == PhotoBackup.everyAlbumIdentifier)
+		let ledgerDestination = selectedFolderID + "|" + self.subDirectoryPath
 
 		// Start the actual synchronization task
 		self.photoBackupTask = Task.detached(priority: .background) {
@@ -283,7 +303,15 @@ enum PhotoBackupProgress {
 				Log.info("Last change token: \(lastSuccessfulChangeToken)")
 				if !fullExport {
 					do {
-						let ids = try self.insertedOrUpdatedLocalIdentifiers(since: lastSuccessfulChangeToken, to: changeToken)
+						// Album mode: a photo can be put in an album later without being changed itself, so ANY change in the
+						// library means "look at all albums again" (the list of photos is not narrowed down to the changed ones)
+						let ids: Set<String>
+						if everyAlbum {
+							ids = try self.anyLibraryChange(since: lastSuccessfulChangeToken)
+						}
+						else {
+							ids = try self.insertedOrUpdatedLocalIdentifiers(since: lastSuccessfulChangeToken, to: changeToken)
+						}
 						if ids.isEmpty {
 							// FIXME: we are skipping purge here
 							Log.info("Nothing changed and not a full export, finishing early!")
@@ -293,7 +321,7 @@ enum PhotoBackupProgress {
 							}
 							return
 						}
-						onlyTheseLocalIdentifiers = ids
+						onlyTheseLocalIdentifiers = everyAlbum ? nil : ids
 					}
 					catch PHPhotosError.persistentChangeTokenExpired,
 						PHPhotosError.persistentChangeDetailsUnavailable
@@ -329,6 +357,29 @@ enum PhotoBackupProgress {
 			}
 
 			let folderURL = URL(fileURLWithPath: folderPath)
+
+			// Fork: album mode: one pass over every user album, each album saved in a folder with its name
+			if everyAlbum {
+				let complete = try await self.backupEveryAlbum(
+					appState: appState,
+					folder: folder,
+					folderURL: folderURL,
+					subDirectoryPath: subDirectoryPath,
+					destination: ledgerDestination,
+					fullExport: fullExport,
+					categories: categories,
+					includeAllBurstAssets: includeAllBurstAssets,
+					isInBackground: isInBackground
+				)
+				// Save the change token only when everything was saved: otherwise the next run must look again
+				if complete {
+					DispatchQueue.main.async {
+						self.lastSuccessfulChangeToken = changeToken
+					}
+				}
+				return
+			}
+
 			let fetchResult: PHFetchResult<PHAssetCollection>
 			if selectedAlbumID == PhotoBackup.allPhotosAlbumIdentifier {
 				fetchResult = PHAssetCollection.fetchAssetCollections(
@@ -407,6 +458,142 @@ enum PhotoBackupProgress {
 		self.lastSuccessfulChangeToken = nil
 	}
 
+	// Album mode: is there ANY change in the photo library since this token (a new photo, a photo put in an album, a new album, ...)?
+	// A set with one entry means yes, an empty set means no.
+	private nonisolated func anyLibraryChange(since: PHPersistentChangeToken) throws -> Set<String> {
+		let changes = try PHPhotoLibrary.shared().fetchPersistentChanges(since: since)
+		for _ in changes {
+			return ["*"]
+		}
+		return []
+	}
+
+	// Album mode ("Every album (one folder per album)"): one pass over all user albums. Each album is saved in a folder with its name;
+	// a photo that is in two albums is saved in both folders; photos that are in no user album go to the folder "No album".
+	// The ledger (a small file, see AlbumFolderNaming.swift) knows what was saved before, so only what is missing is saved.
+	// Returns true when everything that had to be saved was saved (then the caller may remember the library change token).
+	private nonisolated func backupEveryAlbum(
+		appState: AppState,
+		folder: SushitrainFolder,
+		folderURL: URL,
+		subDirectoryPath: EntryPath,
+		destination: String,
+		fullExport: Bool,
+		categories: Set<PhotoBackupCategory>,
+		includeAllBurstAssets: Bool,
+		isInBackground: Bool
+	) async throws -> Bool {
+		let ledgerURL = try albumLedgerFileURL(destination: destination)
+		let ledger = AlbumExportLedger.load(destination: destination, fileURL: ledgerURL)
+		ledger.ignoreExisting = fullExport
+		Log.info("Album back-up: ledger \(ledgerURL.lastPathComponent): \(ledger.loadNote)")
+		defer { ledger.saveNow() }
+
+		// All user albums, and the folder name each one is saved in (names given in earlier runs are kept)
+		let albums = userAlbumCollections()
+		let albumRefs = albums.map { AlbumFolderRef(id: $0.localIdentifier, title: $0.localizedTitle ?? "") }
+		let folderNames = ledger.assignAlbums(albumRefs)
+		ledger.saveNow()
+		Log.info("Album back-up: \(albums.count) albums")
+
+		// Which photos are in at least one album? The others are saved in "No album".
+		let listOptions = PHFetchOptions()
+		listOptions.includeAllBurstAssets = includeAllBurstAssets
+		var inAnyAlbum = Set<String>()
+		for album in albums {
+			let members = PHAsset.fetchAssets(in: album, options: listOptions)
+			members.enumerateObjects { member, _, _ in
+				_ = inAnyAlbum.insert(member.localIdentifier)
+			}
+		}
+
+		let ordered = albums.sorted {
+			(folderNames[$0.localIdentifier] ?? "").lowercased() < (folderNames[$1.localIdentifier] ?? "").lowercased()
+		}
+
+		// One album after the other. An album that fails does not stop the others; the first error is reported at the end.
+		var firstError: Error? = nil
+		for album in ordered {
+			if Task.isCancelled { break }
+			guard let folderName = folderNames[album.localIdentifier] else { continue }
+			let context = AlbumExportContext(
+				ledger: ledger, folderName: folderName, albumID: album.localIdentifier, skipAssetIDs: [])
+			do {
+				try await self.backupAlbum(
+					appState: appState,
+					album: album,
+					folder: folder,
+					folderURL: folderURL,
+					subDirectoryPath: subDirectoryPath,
+					fullExport: fullExport,
+					categories: categories,
+					includeAllBurstAssets: includeAllBurstAssets,
+					isInBackground: isInBackground,
+					onlyTheseLocalIdentifiers: nil,
+					albumContext: context
+				)
+			}
+			catch {
+				if Task.isCancelled { throw error }
+				Log.warn("Album back-up: the album '\(folderName)' could not be saved completely: \(error.localizedDescription)")
+				if firstError == nil { firstError = error }
+			}
+		}
+
+		// Photos and videos that are in no user album
+		if !Task.isCancelled {
+			let libraries = PHAssetCollection.fetchAssetCollections(
+				with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil)
+			if let library = libraries.firstObject {
+				let context = AlbumExportContext(
+					ledger: ledger, folderName: AlbumFolderNaming.noAlbumFolderName,
+					albumID: AlbumFolderNaming.noAlbumIdentifier, skipAssetIDs: inAnyAlbum)
+				do {
+					try await self.backupAlbum(
+						appState: appState,
+						album: library,
+						folder: folder,
+						folderURL: folderURL,
+						subDirectoryPath: subDirectoryPath,
+						fullExport: fullExport,
+						categories: categories,
+						includeAllBurstAssets: includeAllBurstAssets,
+						isInBackground: isInBackground,
+						onlyTheseLocalIdentifiers: nil,
+						albumContext: context
+					)
+				}
+				catch {
+					if Task.isCancelled { throw error }
+					Log.warn("Album back-up: the photos in no album could not be saved completely: \(error.localizedDescription)")
+					if firstError == nil { firstError = error }
+				}
+			}
+		}
+
+		ledger.saveNow()
+		if let saveError = ledger.lastSaveError {
+			Log.warn("Album back-up: the ledger could not be written: \(saveError)")
+		}
+		Log.info(
+			"Album back-up: saved \(ledger.completedCount) files, \(ledger.adoptedCount) were there already, \(ledger.openCount) not saved, \(ledger.savedItemCount) in the ledger"
+		)
+		if let error = firstError {
+			let message = error.localizedDescription
+			DispatchQueue.main.async { self.progress = .error(message) }
+			throw error
+		}
+		if Task.isCancelled { return false }
+
+		let savedCount = ledger.completedCount
+		let completedDate = Date.now.timeIntervalSinceReferenceDate
+		DispatchQueue.main.async {
+			self.lastCompletedDate = completedDate
+			self.progress = .finished(savedAssets: savedCount, purgedAssets: nil)
+		}
+		return ledger.openCount == 0
+	}
+
 	private nonisolated func backupAlbum(
 		appState: AppState,
 		album: PHAssetCollection,
@@ -417,8 +604,12 @@ enum PhotoBackupProgress {
 		categories: Set<PhotoBackupCategory>,
 		includeAllBurstAssets: Bool,
 		isInBackground: Bool,
-		onlyTheseLocalIdentifiers: Set<String>?
+		onlyTheseLocalIdentifiers: Set<String>?,
+		albumContext: AlbumExportContext? = nil
 	) async throws {
+		// Album mode: whatever happens (an error, a cancel), write down what has been saved so far
+		defer { albumContext?.ledger.saveNow() }
+
 		// Fetch assets to export
 		var cancellingError: Error? = nil
 		let options: PHFetchOptions?
@@ -451,11 +642,16 @@ enum PhotoBackupProgress {
 		let purgeCutoffDate = await Date.now - Double.maximum(Double(self.purgeAfterDays), 0.0) * 86400.0
 		let isSelective = try folder.checkedIsSelective()
 		let myShortDeviceID = appState.client.shortDeviceID()
-		let purgeEnabled = await self.purgeEnabled
+		// Album mode never deletes originals from the library and does not use AAE sidecars (a photo can be in several albums)
+		let purgeEnabledSetting = await self.purgeEnabled
+		let purgeEnabled = purgeEnabledSetting && albumContext == nil
 		let maxAgeInterval = TimeInterval(Double(await self.maxAgeDays) * 86400.0)
 		let timeZone = await self.timeZone
 		let livePhotoReplaceExtension = await self.livePhotoReplaceExtension
-		let includeAAESidecars = await self.includeAAESidecars
+		let includeAAESidecarsSetting = await self.includeAAESidecars
+		let includeAAESidecars = includeAAESidecarsSetting && albumContext == nil
+		// Album mode writes photos atomically (a temporary file, then a rename): a crash never leaves half a photo
+		let photoWriteOptions: Data.WritingOptions = albumContext == nil ? [] : [.atomic]
 
 		// Enumerate assets in this album and export them (or queue them for export)
 		assets.enumerateObjects { asset, index, stop in
@@ -465,6 +661,25 @@ enum PhotoBackupProgress {
 			}
 
 			do {
+				// Album mode: first a cheap check (no look at the photo's files) of what is still to be saved for this photo in this
+				// album's folder. Nothing: skip it. The ledger knows what was saved before.
+				let albumPlan: AlbumAssetPlan?
+				if let context = albumContext {
+					if context.skipAssetIDs.contains(asset.localIdentifier) {
+						return
+					}
+					if let cd = asset.creationDate, maxAgeInterval > 0 && Date.now.timeIntervalSince(cd) > maxAgeInterval {
+						return
+					}
+					albumPlan = context.plan(for: asset, categories: categories)
+					if albumPlan == nil {
+						return
+					}
+				}
+				else {
+					albumPlan = nil
+				}
+
 				Log.info("Asset: \(asset.originalFilename) \(asset.localIdentifier)")
 
 				if let cd = asset.creationDate, maxAgeInterval > 0 && Date.now.timeIntervalSince(cd) > maxAgeInterval {
@@ -477,14 +692,23 @@ enum PhotoBackupProgress {
 				}
 
 				// Determine target directory path
-				let assetDirectoryPath = asset.directoryPathInFolder(
-					structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone)
+				let assetDirectoryPath: EntryPath
+				let inFolderPath: EntryPath
+				if let context = albumContext, let plan = albumPlan {
+					// Album mode: <path in folder>/<album name>/<file name>
+					assetDirectoryPath = subDirectoryPath.appending(context.folderName, isDirectory: true)
+					inFolderPath = assetDirectoryPath.appending(plan.primaryName, isDirectory: false)
+				}
+				else {
+					assetDirectoryPath = asset.directoryPathInFolder(
+						structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone)
+					inFolderPath = asset.pathInFolder(structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone)
+				}
 				let dirInFolder = folderURL.appending(path: assetDirectoryPath.pathInFolder, directoryHint: .isDirectory)
-				let inFolderPath = asset.pathInFolder(structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone)
 				Log.info("- \(inFolderPath) \(dirInFolder) \(subDirectoryPath)")
 
-				// Check if this photo was saved or deleted before
-				if purgeEnabled || !fullExport {
+				// Check if this photo was saved or deleted before (album mode does its own check below)
+				if albumPlan == nil && (purgeEnabled || !fullExport) {
 					if let entry = try? folder.getFileInformation(inFolderPath.pathInFolder) {
 						// If purging is enabled, check if we should remove the photo from the source
 						if purgeEnabled {
@@ -517,12 +741,47 @@ enum PhotoBackupProgress {
 					}
 				}
 
+				// Album mode: leave alone what is already there (saved in an earlier run, or deleted from the folder on purpose,
+				// as the existing check above does for the other layouts) and remember it as done.
+				var saveAlbumPrimary = true
+				var saveAlbumLive = true
+				if let context = albumContext, let plan = albumPlan {
+					saveAlbumPrimary = plan.wantsPrimary
+					saveAlbumLive = plan.wantsLive
+					if !fullExport {
+						if saveAlbumPrimary
+							&& context.isAlreadyThere(folder: folder, folderURL: folderURL, pathInFolder: inFolderPath.pathInFolder)
+						{
+							Log.info("Album back-up: \(inFolderPath) is there already, not saving again")
+							context.ledger.markAdopted(key: plan.primaryKey, relativePath: context.relativePath(plan.primaryName))
+							saveAlbumPrimary = false
+						}
+						if saveAlbumLive {
+							let livePathInFolder = assetDirectoryPath.appending(plan.liveName, isDirectory: false)
+							if context.isAlreadyThere(folder: folder, folderURL: folderURL, pathInFolder: livePathInFolder.pathInFolder) {
+								Log.info("Album back-up: \(livePathInFolder) is there already, not saving again")
+								context.ledger.markAdopted(key: plan.liveKey, relativePath: context.relativePath(plan.liveName))
+								saveAlbumLive = false
+							}
+						}
+					}
+					if !saveAlbumPrimary && !saveAlbumLive {
+						return
+					}
+				}
+
 				// Create containing directory
 				try FileManager.default.createDirectory(at: dirInFolder, withIntermediateDirectories: true)
 
 				// Save asset if it doesn't exist already locally
 				let fileURL = folderURL.appending(path: inFolderPath.pathInFolder, directoryHint: .notDirectory)
-				if !FileManager.default.fileExists(atPath: fileURL.path) || fullExport {
+				if saveAlbumPrimary && (!FileManager.default.fileExists(atPath: fileURL.path) || fullExport) {
+					// Album mode: this file counts as saved only after it has been written completely
+					if let context = albumContext, let plan = albumPlan {
+						context.ledger.expect(
+							pathInFolder: inFolderPath.pathInFolder, key: plan.primaryKey,
+							relativePath: context.relativePath(plan.primaryName))
+					}
 					let resources = PHAssetResource.assetResources(for: asset)
 					let adjustment = resources.first { $0.type == .adjustmentData }
 					var exportsPhotoResources = false
@@ -573,7 +832,7 @@ enum PhotoBackupProgress {
 							PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
 								if let data = data {
 									do {
-										try data.write(to: fileURL)
+										try data.write(to: fileURL, options: photoWriteOptions)
 										selectPaths.append(inFolderPath)
 
 										// Set file creation and modified date to photo creation date. The modified date is what is synced
@@ -584,6 +843,9 @@ enum PhotoBackupProgress {
 										}
 
 										assetsSavedSuccessfully.append(asset)
+
+										// Album mode: the photo is written completely, now its key goes into the ledger
+										albumContext?.ledger.completed(pathInFolder: inFolderPath.pathInFolder)
 									}
 									catch {
 										Log.warn("Image data request failed: \(error.localizedDescription) ")
@@ -604,21 +866,38 @@ enum PhotoBackupProgress {
 				}
 
 				// If the image is a live photo, queue the live photo for saving as well
-				if asset.mediaType == .image && asset.mediaSubtypes.contains(.photoLive) && categories.contains(.livePhoto) {
-					let liveInFolderPath = asset.livePhotoPathInFolder(
-						structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone,
-						replaceExtension: livePhotoReplaceExtension)
-					let liveDirectoryURL = folderURL.appending(
-						path: asset.livePhotoDirectoryPathInFolder(
-							structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone
-						)
-						.pathInFolder,
-						directoryHint: .isDirectory)
+				if asset.mediaType == .image && asset.mediaSubtypes.contains(.photoLive) && categories.contains(.livePhoto)
+					&& saveAlbumLive
+				{
+					let liveInFolderPath: EntryPath
+					let liveDirectoryURL: URL
+					if let plan = albumPlan {
+						// Album mode: the video sits next to the picture (IMG_0001.HEIC + IMG_0001.MOV), no "Live" folder
+						liveInFolderPath = assetDirectoryPath.appending(plan.liveName, isDirectory: false)
+						liveDirectoryURL = dirInFolder
+					}
+					else {
+						liveInFolderPath = asset.livePhotoPathInFolder(
+							structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone,
+							replaceExtension: livePhotoReplaceExtension)
+						liveDirectoryURL = folderURL.appending(
+							path: asset.livePhotoDirectoryPathInFolder(
+								structure: structure, subdirectoryPath: subDirectoryPath, timeZone: timeZone
+							)
+							.pathInFolder,
+							directoryHint: .isDirectory)
+					}
 					try FileManager.default.createDirectory(at: liveDirectoryURL, withIntermediateDirectories: true)
 					let liveFileURL = folderURL.appending(path: liveInFolderPath.pathInFolder, directoryHint: .notDirectory)
 					Log.info("Found live photo \(asset.originalFilename) \(liveInFolderPath)")
 
 					if !FileManager.default.fileExists(atPath: liveFileURL.path) {
+						// Album mode: the video counts as saved only after it has been written completely
+						if let context = albumContext, let plan = albumPlan {
+							context.ledger.expect(
+								pathInFolder: liveInFolderPath.pathInFolder, key: plan.liveKey,
+								relativePath: context.relativePath(plan.liveName))
+						}
 						livePhotosToExport.append((asset, liveFileURL, liveInFolderPath))
 					}
 				}
@@ -630,7 +909,8 @@ enum PhotoBackupProgress {
 		}
 
 		// Select paths a first time for photos (video export may take too long)
-		if isSelective {
+		// (album mode: only when there is something to select, so that albums without news cost nothing)
+		if isSelective && (albumContext == nil || !selectPaths.isEmpty) {
 			Log.info("Selecting paths (photos only)")
 			#if os(iOS)
 				Log.info("Background time remaining: \(await UIApplication.shared.backgroundTimeRemaining))")
@@ -701,6 +981,9 @@ enum PhotoBackupProgress {
 
 				selectPaths.append(selectPath)
 				assetsSavedSuccessfully.append(asset)
+
+				// Album mode: the video is written completely, now its key goes into the ledger
+				albumContext?.ledger.completed(pathInFolder: selectPath.pathInFolder)
 			}
 		}
 
@@ -759,6 +1042,9 @@ enum PhotoBackupProgress {
 					selectPaths.append(selectPath)
 					assetsSavedSuccessfully.append(asset)
 
+					// Album mode: the live photo's video is written completely, now its key goes into the ledger
+					albumContext?.ledger.completed(pathInFolder: selectPath.pathInFolder)
+
 					if let cd = asset.creationDate {
 						try FileManager.default.setAttributes(
 							[FileAttributeKey.creationDate: cd, FileAttributeKey.modificationDate: cd],
@@ -816,7 +1102,7 @@ enum PhotoBackupProgress {
 		}
 
 		// Select paths
-		if isSelective {
+		if isSelective && (albumContext == nil || !selectPaths.isEmpty) {
 			Log.info("Selecting paths")
 			#if os(iOS)
 				Log.info("Background time remaining: \(await UIApplication.shared.backgroundTimeRemaining))")
@@ -837,8 +1123,8 @@ enum PhotoBackupProgress {
 			}
 		}
 
-		// Tag saved items
-		if await !savedAlbumID.isEmpty && !assetsSavedSuccessfully.isEmpty {
+		// Tag saved items (not in album mode: the "saved" album would become a folder of its own)
+		if albumContext == nil, await !savedAlbumID.isEmpty && !assetsSavedSuccessfully.isEmpty {
 			Log.info("Tagging \(assetsSavedSuccessfully.count) saved items")
 			if let savedAlbum = await PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [savedAlbumID], options: nil)
 				.firstObject
@@ -868,12 +1154,14 @@ enum PhotoBackupProgress {
 			purgedAssetCount = assets.count
 		}
 
-		// Write 'last completed' date
+		// Write 'last completed' date (album mode: backupEveryAlbum does this once, after the last album)
 		let purgedAssetCountLet = purgedAssetCount
 		let completedDate = Date.now.timeIntervalSinceReferenceDate
-		DispatchQueue.main.async {
-			self.lastCompletedDate = completedDate
-			self.progress = .finished(savedAssets: assets.count, purgedAssets: purgedAssetCountLet)
+		if albumContext == nil {
+			DispatchQueue.main.async {
+				self.lastCompletedDate = completedDate
+				self.progress = .finished(savedAssets: assets.count, purgedAssets: purgedAssetCountLet)
+			}
 		}
 		Log.info("Photo back-up done")
 
@@ -951,7 +1239,7 @@ extension PHAsset {
 				}
 			}
 
-		case .singleFolder, .byType, .singleFolderDatePrefixed: break
+		case .singleFolder, .byType, .singleFolderDatePrefixed, .byAlbumName: break
 		}
 
 		// Postfix media type
@@ -960,7 +1248,8 @@ extension PHAsset {
 			if self.mediaType == .video {
 				components.append("Video")
 			}
-		case .byDate, .singleFolder, .singleFolderDatePrefixed, .byDateComponent, .byYear, .byYearMonth, .byYearDashMonth:
+		case .byDate, .singleFolder, .singleFolderDatePrefixed, .byDateComponent, .byYear, .byYearMonth, .byYearDashMonth,
+			.byAlbumName:
 			break
 		}
 
@@ -976,7 +1265,8 @@ extension PHAsset {
 		switch structure {
 		case .byDateAndType, .byType, .byDateComponentAndType, .byYearAndType, .byYearMonthAndType, .byYearDashMonthAndType:
 			path = path.appending("Live", isDirectory: true)
-		case .byDate, .singleFolder, .singleFolderDatePrefixed, .byDateComponent, .byYear, .byYearMonth, .byYearDashMonth:
+		case .byDate, .singleFolder, .singleFolderDatePrefixed, .byDateComponent, .byYear, .byYearMonth, .byYearDashMonth,
+			.byAlbumName:
 			break
 		}
 		return path
@@ -1005,7 +1295,7 @@ extension PHAsset {
 	func fileNameInFolder(structure: PhotoBackupFolderStructure) -> String {
 		switch structure {
 		case .byDate, .byDateAndType, .byDateComponent, .byDateComponentAndType, .singleFolder, .byType, .byYear,
-			.byYearMonth, .byYearAndType, .byYearMonthAndType, .byYearDashMonth, .byYearDashMonthAndType:
+			.byYearMonth, .byYearAndType, .byYearMonthAndType, .byYearDashMonth, .byYearDashMonthAndType, .byAlbumName:
 			return self.originalFilename
 
 		case .singleFolderDatePrefixed:
@@ -1046,6 +1336,96 @@ private struct EntryPath {
 	var pathInFolder: String {
 		return self.url.path(percentEncoded: false).withoutStartingSlash
 	}
+}
+
+// MARK: - Album mode ("Every album"): helpers. The naming rules and the ledger are in AlbumFolderNaming.swift (pure Swift).
+
+/// Album mode: where one album (or "No album") is saved in this run, and what is already saved.
+private struct AlbumExportContext: Sendable {
+	let ledger: AlbumExportLedger
+	/// The folder inside "Path in folder" that this album is saved in
+	let folderName: String
+	/// Photos' local identifier of the album (AlbumFolderNaming.noAlbumIdentifier for "No album")
+	let albumID: String
+	/// Photos that must be left out: for "No album" all photos that are in a user album
+	let skipAssetIDs: Set<String>
+
+	/// The path of a file as the ledger keeps it: "Holiday 2024/IMG_0001.HEIC"
+	func relativePath(_ fileName: String) -> String {
+		return folderName + "/" + fileName
+	}
+
+	/// Whether a file is there already: Syncthing knows it (also when it was deleted from the folder on purpose), or it is on the disk
+	func isAlreadyThere(folder: SushitrainFolder, folderURL: URL, pathInFolder: String) -> Bool {
+		if (try? folder.getFileInformation(pathInFolder)) != nil {
+			return true
+		}
+		let url = folderURL.appending(path: pathInFolder, directoryHint: .notDirectory)
+		return FileManager.default.fileExists(atPath: url.path)
+	}
+
+	/// What still has to be saved for this photo or video in this album's folder; nil = nothing (it is all in the ledger).
+	/// The photo (or video) and the video of a Live Photo are two separate parts, each with its own key.
+	func plan(for asset: PHAsset, categories: Set<PhotoBackupCategory>) -> AlbumAssetPlan? {
+		let isVideo = asset.mediaType == .video
+		let primaryKind: PhotoBackupCategory = isVideo ? .video : .photo
+		let isLivePhoto = asset.mediaType == .image && asset.mediaSubtypes.contains(.photoLive)
+		let primaryKey = AlbumExportLedger.key(
+			assetID: asset.localIdentifier, albumID: albumID, kind: primaryKind.rawValue)
+		let liveKey = AlbumExportLedger.key(
+			assetID: asset.localIdentifier, albumID: albumID, kind: PhotoBackupCategory.livePhoto.rawValue)
+		let wantsPrimary = categories.contains(primaryKind) && !ledger.isDone(primaryKey)
+		let wantsLive = isLivePhoto && categories.contains(.livePhoto) && !ledger.isDone(liveKey)
+		if !wantsPrimary && !wantsLive {
+			return nil
+		}
+		let parts = ledger.fileName(forAsset: asset.localIdentifier, folder: folderName, originalName: asset.originalFilename)
+		return AlbumAssetPlan(
+			primaryName: AlbumFolderNaming.composeFileName(stem: parts.stem, ext: parts.ext),
+			liveName: parts.stem + ".MOV",
+			primaryKey: primaryKey,
+			liveKey: liveKey,
+			wantsPrimary: wantsPrimary,
+			wantsLive: wantsLive
+		)
+	}
+}
+
+/// Album mode: the file names and keys for one photo or video in one album folder.
+private struct AlbumAssetPlan: Sendable {
+	/// The photo or video, for example IMG_0001.HEIC
+	let primaryName: String
+	/// The video of a Live Photo, next to the picture: IMG_0001.MOV
+	let liveName: String
+	let primaryKey: String
+	let liveKey: String
+	/// Whether the photo (or video) still has to be saved
+	let wantsPrimary: Bool
+	/// Whether the Live Photo's video still has to be saved
+	let wantsLive: Bool
+}
+
+/// Album mode: the albums the user made, and the ones that came from a computer or an import. Not the smart albums (Favorites,
+/// Screenshots, Videos, Recents, ...), not iCloud Shared Albums and not My Photo Stream.
+private func userAlbumCollections() -> [PHAssetCollection] {
+	var result: [PHAssetCollection] = []
+	let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+	collections.enumerateObjects { collection, _, _ in
+		switch collection.assetCollectionSubtype {
+		case .albumRegular, .albumImported, .albumSyncedEvent, .albumSyncedFaces, .albumSyncedAlbum:
+			result.append(collection)
+		default:
+			break
+		}
+	}
+	return result
+}
+
+/// Album mode: where the ledger of one destination lives: the app's Application Support folder
+private func albumLedgerFileURL(destination: String) throws -> URL {
+	let support = try FileManager.default.url(
+		for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+	return support.appendingPathComponent(AlbumExportLedger.fileName(forDestination: destination))
 }
 
 extension SushitrainFolder {

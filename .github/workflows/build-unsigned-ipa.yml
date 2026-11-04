@@ -89,6 +89,22 @@ jobs:
             df -h /
           } 2>&1 | tee -a "$BUILD_LOG"
 
+      - id: albumnaming
+        name: Self-test of the album folder naming (plain swiftc, seconds)
+        # The "Every album" back-up layout names its folders and files in Sushitrain/AlbumFolderNaming.swift, a file with no Photos /
+        # UIKit imports. This compiles it together with a small self-test program (tools/albumnaming_selftest) and runs it. A compile
+        # error or a failed check ("ERROR: ..." lines) stops the build here, in seconds, before the long Go and Xcode steps.
+        timeout-minutes: 5
+        run: |
+          {
+            echo "=== album naming self-test ($(date -u +%H:%M:%SZ)) ==="
+            T="$RUNNER_TEMP/albumnaming-selftest"
+            mkdir -p "$T"
+            xcrun swiftc -swift-version 6 -parse-as-library -o "$T/selftest" \
+              Sushitrain/AlbumFolderNaming.swift tools/albumnaming_selftest/AlbumNamingSelfTest.swift
+            "$T/selftest"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
       - id: platform
         name: Install the iOS platform (upstream does this too)
         # soft step: if the platform is already on the image or the download fails, the archive step is the real judge
@@ -251,6 +267,7 @@ jobs:
           STEP_RESULTS: >-
             checkout=${{ steps.checkout.conclusion }}
             xcode=${{ steps.xcode.conclusion }}
+            albumnaming=${{ steps.albumnaming.conclusion }}
             platform=${{ steps.platform.conclusion }}
             go=${{ steps.go.conclusion }}
             identity=${{ steps.identity.conclusion }}

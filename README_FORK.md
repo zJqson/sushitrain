@@ -11,6 +11,10 @@ a Syncthing client). It adds two things for one person's own phone:
 
 The app is called **PhotoTrain** with bundle id `com.jason.phototrain`.
 
+3. **Album folders ("Every album").** In *Settings, Photo back-up, From album* there is a new first entry, **Every album (one folder
+   per album)**. Each album of the Photos library becomes one folder, named like the album, inside the back-up folder (see
+   "Album folders" below). Choosing a single album or the camera roll works exactly as before.
+
 ## Licence (MPL-2.0 notice kept)
 
 The code stays under the **Mozilla Public License 2.0** (the `LICENSE` file and every copyright / licence header in the
@@ -72,7 +76,76 @@ The repository must be public for anonymous reading (and for free, unlimited Mac
 `push_fork.ps1 -Owner USERNAME -KeyPath C:\path\to\private_key` (in the folder that holds this repo): SSH, no token.
 It pushes only `main`. The public half of that key is added once under GitHub *Settings, SSH and GPG keys*.
 
+## Album folders ("Every album (one folder per album)")
+
+Choose it under *Settings, Photo back-up, From album* (it is the first entry; nothing is chosen for you), pick the back-up folder
+and, if you like, a path inside it. Then:
+
+```
+<back-up folder>/<path in folder>/
+    Holiday 2024/IMG_2020.HEIC
+    Holiday 2024/IMG_2021.HEIC
+    Holiday 2024/IMG_2021.MOV        <- the video of a Live Photo, next to its picture (no "Live" folder)
+    Mum's birthday/IMG_2020.HEIC     <- the same photo again, because it is in two albums (copied twice)
+    No album/IMG_3001.JPG            <- photos and videos that are in no album of yours
+```
+
+What counts as an album: the albums you made (also the ones that came from a computer or a camera import). **Not** albums
+that iOS makes by itself (Favorites, Screenshots, Videos, Recents, People, Hidden, ...) and not iCloud Shared Albums: a photo
+that is only in those goes to `No album`.
+
+- **Windows-safe names.** `\ / : * ? " < > |` and control characters become `_`; names are made Unicode NFC; no space at the start,
+  no space or dot at the end; `CON PRN AUX NUL COM0-9 LPT0-9` (also with an extension) get a `_` (`CON` becomes `CON_`,
+  `nul.txt` becomes `nul_.txt`); at most 100 characters (and 240 bytes); an empty name becomes `Untitled album`. Names that differ
+  only in upper/lower case are the same folder on Windows, so the second one gets ` (2)`, the third ` (3)`. A name is given once
+  and then kept, so it never flips when albums are added or deleted. `No album` is reserved (an album called "No album" becomes
+  "No album (2)"). The same rules are used for file names; two different photos with the same file name in one folder: the second
+  one gets `_` and the first 6 letters/digits of its identifier (`IMG_0001_9F2D7C.HEIC`); only on a clash. All of this is in the
+  one pure file `Sushitrain/AlbumFolderNaming.swift` (Foundation only; it can be reused for other folder names).
+- **What is saved when.** Every change in the photo library (a new photo, a photo put in an album, a new album, ...) triggers one
+  look at all albums (the existing automatic back-up trigger is used, nothing new runs in the background). Only what is missing is
+  saved. What was saved is written in a small file, the *ledger* (`PhotoAlbumLedger-<hash>.json` in the app's Application Support
+  folder; one per back-up folder + path). A key `photo id|album id|photo/video/live` is added only after its file has been written,
+  the file is written atomically (temporary file, then rename) and every few files, so a crash or an iOS kill loses at most the last
+  few keys; those files are found on the disk the next time and are recognised, not saved again. The change token is remembered only
+  after a run in which everything was saved, so a failed file is tried again at the next change.
+- **Nothing is deleted.** Not on the PC and not on the phone. In this mode "Remove saved photos from source" and "Add to album" are
+  hidden and ignored (a photo can be in several albums), and so are "Save photo adjustment data (AAE)", the time-zone setting and
+  "Live photo file extension" (the Live Photo video is always `<same name>.MOV`). A file that is already in the folder, or that you
+  deleted there on purpose (Syncthing knows), is not saved again. "Re-copy all photos" saves everything again to the same names.
+- **Still used:** the photo/live/video switches, "Path in folder", "Do not save photos older than six months" (**on by default**:
+  switch it off if you want every photo, however old), "Save all photos in a burst", and all background and automatic settings.
+
+Known limits:
+
+1. **Renaming an album** on the phone: photos saved after that go to a folder with the new name; the folder with the old name stays
+   (nothing is renamed or moved on the PC). Rename the old folder on the PC by hand if you want one folder; Syncthing syncs that.
+2. **A photo in two albums is stored twice**: twice the space on the PC, and on the phone for as long as the exported copies stay
+   selected for sync (as with the original app: "Exported photos will take up storage space on your device ...").
+3. If the ledger file is lost (app deleted and reinstalled, data cleared), every photo is checked again: files that are already
+   there (on the disk or in Syncthing's list) are recognised, not saved again. In the rare case of two different photos with the
+   same file name in one folder, one of them may then be saved a second time under another name.
+4. Photos that are only in iCloud (not on the phone) cannot be exported (the app does not download them); they are tried again at
+   the next change in the library.
+5. The first run on a big library takes a long time (iOS may stop it; it continues at the next trigger, starting where the ledger
+   says). Keep the app open and the phone charging for the first run.
+6. From reading the code (not tested): the existing back-up pauses the Syncthing folder while it works and puts it back at the end.
+   If iOS kills the app in the middle of a run, the folder may stay paused. The original app behaves like this too and album mode does
+   not change it. If photos stop arriving after a crash, check that the folder is not paused.
+
+Undo: `git revert <the album-folders commit>` (see the commit list) and push with `push_fork.ps1`; the ledger files become unused.
+
+## Self-test in the build
+
+The workflow step `albumnaming` (before the long steps) compiles `Sushitrain/AlbumFolderNaming.swift` together with
+`tools/albumnaming_selftest/AlbumNamingSelfTest.swift` using the plain `swiftc` of the runner and runs it. It checks every naming
+rule (forbidden characters, control characters, NFC, emoji, long names, device names, duplicate and case-only duplicate names,
+stable numbering, file-name clashes, the hash, saving and loading of the ledger, a damaged ledger, another destination). A failed
+check prints a line starting with `ERROR:` and stops the build in seconds. To run it on a Mac:
+`swiftc -swift-version 6 -parse-as-library -o /tmp/selftest Sushitrain/AlbumFolderNaming.swift tools/albumnaming_selftest/AlbumNamingSelfTest.swift && /tmp/selftest`.
+
 ## Not proven yet
 
-Nothing in this fork was compiled before the first run. The first logs on the `build-logs` branch are the first compile.
-Expect a few fix rounds (Swift 6 strict-concurrency errors in `Sushitrain/BackgroundKeepAlive.swift` are the most likely).
+The first compile of the fork (Go core, Xcode project, workflow) succeeded (run 1). The album-folder mode was written without a
+compiler on hand: the build logs on the `build-logs` branch are its first compile. It was **not** run on a phone: real album
+names, big libraries, Live Photos, the look at all albums after a real change and the iOS kill/restart behaviour are all untested.
