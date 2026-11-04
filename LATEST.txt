@@ -1,18 +1,11 @@
-run 8: FAILURE at step 'ios' - b38e315 - 2026-11-04T11:01:51Z
+run 9: SUCCESS - 82da50c - 2026-11-04T11:21:22Z
 
-Run:      https://github.com/zJqson/sushitrain/actions/runs/41817549757 (attempt 1)
-Commit:   b38e315de03927315b0245a2a6723ad747fc8c70
-Status:   FAILURE
-Steps:    checkout=success xcode=success albumnaming=success photochange=success platform=success go=success identity=success entitlements=success core=success ios=failure package=skipped check_ipa=skipped release=skipped
-Release:  (none)
-IPA:      (none)
-Log:      run-8.log (1161 lines)
+Run:      https://github.com/zJqson/sushitrain/actions/runs/41819316464 (attempt 1)
+Commit:   82da50c649cf3052d1119a990a7441b15073b0d5
+Status:   SUCCESS
+Steps:    checkout=success xcode=success albumnaming=success photochange=success platform=success go=success identity=success entitlements=success core=success ios=success package=success check_ipa=success release=success
+Release:  https://github.com/zJqson/sushitrain/releases/download/build-9/PhotoTrain.ipa
+IPA:      PhotoTrain.ipa 12580578 bytes, sha256 461582eac79485b8e7c98a01f41194e2bb27922cea25a45fde6bba8d1ef29046
+Log:      run-9.log (1306 lines)
 
-First 7 error lines of the build output (number = line in run-8.log):
-  1117: /Users/runner/work/sushitrain/sushitrain/Sushitrain/PhotoBackup.swift:805:73: error: extra argument 'containing' in call
-  1121:      |                                                                         `- error: extra argument 'containing' in call
-  1125: /Users/runner/work/sushitrain/sushitrain/Sushitrain/PhotoBackup.swift:805:78: error: missing argument for parameter 'subtype' in call
-  1129:      |                                                                              `- error: missing argument for parameter 'subtype' in call
-  1153: ** ARCHIVE FAILED **
-  1156: The following build commands failed:
-  1161: make: *** [ios] Error 65
+No error lines found in the build output.
