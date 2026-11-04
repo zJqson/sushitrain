@@ -269,6 +269,19 @@ enum AlbumFolderNaming {
 		let hex = String(hash, radix: 16)
 		return String(repeating: "0", count: max(0, 16 - hex.count)) + hex
 	}
+
+	/// Gives a finished file its real name: the file is moved there in one step, and a file that is already there is replaced in one
+	/// step. A file written to a temporary place first and moved like this has its real name only when it is complete, so a crash
+	/// never leaves half a file under a real name.
+	static func moveIntoPlace(_ temporary: URL, to destination: URL) throws {
+		let manager = FileManager.default
+		if manager.fileExists(atPath: destination.path) {
+			_ = try manager.replaceItemAt(destination, withItemAt: temporary)
+		}
+		else {
+			try manager.moveItem(at: temporary, to: destination)
+		}
+	}
 }
 
 // MARK: - The ledger

@@ -105,8 +105,10 @@ that is only in those goes to `No album`.
 - **What is saved when.** Every change in the photo library (a new photo, a photo put in an album, a new album, ...) triggers one
   look at all albums (the existing automatic back-up trigger is used, nothing new runs in the background). Only what is missing is
   saved. What was saved is written in a small file, the *ledger* (`PhotoAlbumLedger-<hash>.json` in the app's Application Support
-  folder; one per back-up folder + path). A key `photo id|album id|photo/video/live` is added only after its file has been written,
-  the file is written atomically (temporary file, then rename) and every few files, so a crash or an iOS kill loses at most the last
+  folder; one per back-up folder + path). Photos, videos and the videos of Live Photos are written to a temporary file first and get
+  their real name only when complete (so a kill never leaves half a file under a real name that a later run would take for a
+  finished one). A key `photo id|album id|photo/video/live` is added only after its file is in place,
+  the ledger is written atomically (temporary file, then rename) and every few files, so a crash or an iOS kill loses at most the last
   few keys; those files are found on the disk the next time and are recognised, not saved again. When a run ends (not cancelled, no
   error) the library state is remembered, so the next automatic run stops at once if nothing changed. A file that could not be
   saved in a run that ended normally (for example a photo that is only in iCloud) is tried again at the next change in the library

@@ -681,8 +681,6 @@ enum PhotoBackupProgress {
 		let livePhotoReplaceExtension = await self.livePhotoReplaceExtension
 		let includeAAESidecarsSetting = await self.includeAAESidecars
 		let includeAAESidecars = includeAAESidecarsSetting && albumContext == nil
-		// Album mode writes photos atomically (a temporary file, then a rename): a crash never leaves half a photo
-		let photoWriteOptions: Data.WritingOptions = albumContext == nil ? [] : [.atomic]
 
 		// Enumerate assets in this album and export them (or queue them for export)
 		assets.enumerateObjects { asset, index, stop in
@@ -863,7 +861,15 @@ enum PhotoBackupProgress {
 							PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, info in
 								if let data = data {
 									do {
-										try data.write(to: fileURL, options: photoWriteOptions)
+										if albumContext == nil {
+											try data.write(to: fileURL)
+										}
+										else {
+											// Album mode: temporary file first, real name only when complete
+											let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+											try data.write(to: temporary)
+											try AlbumFolderNaming.moveIntoPlace(temporary, to: fileURL)
+										}
 										selectPaths.append(inFolderPath)
 
 										// Set file creation and modified date to photo creation date. The modified date is what is synced
@@ -983,6 +989,11 @@ enum PhotoBackupProgress {
 
 				DispatchQueue.main.async { self.progress = .exportingVideos(index: idx, total: videoCount, current: nil) }
 
+				// Album mode: the video is written to a temporary file first and moved to its real name when it is complete, so a
+				// crash never leaves half a video under its real name (a later run would take it for a finished one)
+				let videoWriteURL =
+					albumContext == nil ? fileURL : FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+
 				do {
 					try await withCheckedThrowingContinuation { resolve in
 						Log.info("Copying original video resource for \(asset.originalFilename)")
@@ -993,7 +1004,7 @@ enum PhotoBackupProgress {
 							return
 						}
 
-						PHAssetResourceManager.default().writeData(for: resource, toFile: fileURL, options: nil) { error in
+						PHAssetResourceManager.default().writeData(for: resource, toFile: videoWriteURL, options: nil) { error in
 							if let error = error {
 								Log.warn("Failed to save original video for \(asset.originalFilename): \(error.localizedDescription)")
 								resolve.resume(throwing: error)
@@ -1004,6 +1015,11 @@ enum PhotoBackupProgress {
 							}
 						}
 					}
+
+					// Album mode: complete, so now it gets its real name
+					if albumContext != nil && FileManager.default.fileExists(atPath: videoWriteURL.path) {
+						try AlbumFolderNaming.moveIntoPlace(videoWriteURL, to: fileURL)
+					}
 				}
 				catch {
 					Log.warn("Failed to save original video for \(asset.originalFilename): \(error.localizedDescription)")
@@ -1013,8 +1029,10 @@ enum PhotoBackupProgress {
 				selectPaths.append(selectPath)
 				assetsSavedSuccessfully.append(asset)
 
-				// Album mode: the video is written completely, now its key goes into the ledger
-				albumContext?.ledger.completed(pathInFolder: selectPath.pathInFolder)
+				// Album mode: the video is in its place, now its key goes into the ledger
+				if FileManager.default.fileExists(atPath: fileURL.path) {
+					albumContext?.ledger.completed(pathInFolder: selectPath.pathInFolder)
+				}
 			}
 		}
 
@@ -1030,6 +1048,10 @@ enum PhotoBackupProgress {
 			for (idx, (asset, destURL, selectPath)) in livePhotosToExport.enumerated() {
 				if Task.isCancelled { break }
 				Log.info("Exporting live photo \(asset.originalFilename) \(selectPath)")
+
+				// Album mode: written to a temporary file first, moved to its real name when complete (see the videos above)
+				let liveWriteURL =
+					albumContext == nil ? destURL : FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
 
 				do {
 					try await withCheckedThrowingContinuation { resolve in
@@ -1059,7 +1081,7 @@ enum PhotoBackupProgress {
 								return
 							}
 
-							PHAssetResourceManager.default().writeData(for: videoResource, toFile: destURL, options: nil) { error in
+							PHAssetResourceManager.default().writeData(for: videoResource, toFile: liveWriteURL, options: nil) { error in
 								if let error = error {
 									resolve.resume(throwing: error)
 								}
@@ -1070,11 +1092,18 @@ enum PhotoBackupProgress {
 						}
 					}
 
+					// Album mode: complete, so now it gets its real name
+					if albumContext != nil && FileManager.default.fileExists(atPath: liveWriteURL.path) {
+						try AlbumFolderNaming.moveIntoPlace(liveWriteURL, to: destURL)
+					}
+
 					selectPaths.append(selectPath)
 					assetsSavedSuccessfully.append(asset)
 
-					// Album mode: the live photo's video is written completely, now its key goes into the ledger
-					albumContext?.ledger.completed(pathInFolder: selectPath.pathInFolder)
+					// Album mode: the live photo's video is in its place, now its key goes into the ledger
+					if FileManager.default.fileExists(atPath: destURL.path) {
+						albumContext?.ledger.completed(pathInFolder: selectPath.pathInFolder)
+					}
 
 					if let cd = asset.creationDate {
 						try FileManager.default.setAttributes(

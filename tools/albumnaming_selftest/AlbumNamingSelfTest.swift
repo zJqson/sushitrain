@@ -313,6 +313,24 @@ struct AlbumNamingSelfTest {
 			print("note: this account can read files with no permission (root?), the unreadable-ledger check was skipped")
 		}
 
+		// 22c. A finished file gets its real name in one step (new name, and replacing an existing file)
+		let dir5 = FileManager.default.temporaryDirectory.appendingPathComponent("albumnaming-selftest-" + UUID().uuidString)
+		let movedA = dir5.appendingPathComponent("part-one")
+		let movedB = dir5.appendingPathComponent("IMG_0001.MOV")
+		do {
+			try FileManager.default.createDirectory(at: dir5, withIntermediateDirectories: true)
+			try Data("one".utf8).write(to: movedA)
+			try AlbumFolderNaming.moveIntoPlace(movedA, to: movedB)
+			expectTrue(!FileManager.default.fileExists(atPath: movedA.path), "the temporary file is gone after the move")
+			expectTrue((try? Data(contentsOf: movedB)) == Data("one".utf8), "a new file is in place")
+			try Data("two".utf8).write(to: movedA)
+			try AlbumFolderNaming.moveIntoPlace(movedA, to: movedB)
+			expectTrue((try? Data(contentsOf: movedB)) == Data("two".utf8), "an existing file is replaced")
+		}
+		catch {
+			fail("moveIntoPlace threw: \(error)")
+		}
+
 		// 23. A whole story with the real planning code (the same calls the back-up makes, with a pretend photo library and a
 		//     pretend disk): a first pass, a second pass that must save nothing, a second photo with the same file name, a renamed
 		//     album, a crash in the middle of a file, a restart, and "Re-copy all photos".
