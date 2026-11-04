@@ -53,7 +53,11 @@ enum PhotoChangePlan: Equatable, Sendable {
 
 /// How a back-up run ended.
 enum PhotoRunOutcome: Equatable, Sendable {
+	/// Ended normally and saved everything it was asked to save.
 	case completed
+	/// Ended normally, but a photo or video that was ADDED could not be saved yet (it was not readable a moment ago, or it is only in
+	/// iCloud). Only the fast path reports this; see `PhotoChangePlanner.fastPassOutcome`.
+	case incomplete
 	case cancelled
 	case failed
 }
@@ -112,8 +116,24 @@ enum PhotoChangePlanner {
 		return .only(work)
 	}
 
+	/// How a FAST pass ended. A fast pass looks only at the photos the library reported, so no later pass is sure to find a file it could
+	/// not save (a full pass looks at everything again at its next run). Therefore it is `incomplete` - the old library state is kept and
+	/// the next run reads the same changes again - when a photo or video that was ADDED is still open. A changed old photo that cannot be
+	/// saved (typically it is only in iCloud) does not hold the state back: iCloud touches many such photos all the time, and holding the
+	/// state would make every later run read them again until the limit forces a full pass.
+	static func fastPassOutcome(openAssetIDs: Set<String>, inserted: Set<String>, cancelled: Bool) -> PhotoRunOutcome {
+		if cancelled {
+			return .cancelled
+		}
+		if !openAssetIDs.isDisjoint(with: inserted) {
+			return .incomplete
+		}
+		return .completed
+	}
+
 	/// May the back-up remember the library state it started from (so that the next run only reads newer changes)?
-	/// Only when the run ended without an error and was not cancelled: otherwise the next run must read the same changes again.
+	/// Only when the run ended without an error, was not cancelled and saved everything it was asked to save (`completed`): otherwise
+	/// the next run must read the same changes again.
 	/// A run with nothing to do remembers it only when changes were seen (so they are not read again), not when nothing happened.
 	static func mayRememberLibraryState(plan: PhotoChangePlan, hadChanges: Bool, outcome: PhotoRunOutcome) -> Bool {
 		if outcome != .completed {
@@ -124,6 +144,20 @@ enum PhotoChangePlanner {
 			return hadChanges
 		case .only, .full:
 			return true
+		}
+	}
+
+	/// The end of a run in words, for the log.
+	static func describeOutcome(_ outcome: PhotoRunOutcome) -> String {
+		switch outcome {
+		case .completed:
+			return "done"
+		case .incomplete:
+			return "done, but an added photo could not be saved yet (tried again at the next run)"
+		case .cancelled:
+			return "cancelled"
+		case .failed:
+			return "failed"
 		}
 	}
 

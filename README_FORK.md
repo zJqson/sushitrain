@@ -184,11 +184,18 @@ album change. An album that cannot be found any more (deleted) does.
 
 **When the library state is remembered.** After a fast or full pass the app remembers the state of the library, so the next run reads
 only newer changes. It does that only when the pass ended without an error and was not cancelled; otherwise the next trigger reads
-the same changes again and tries again. A file that could not be saved in a pass that ended normally (a photo that is only in iCloud:
-the app never downloads from iCloud) is not retried by later fast runs; it is tried again at the next full pass or when the photo
-changes again (for example when iOS downloads it).
+the same changes again and tries again. Files that could not be saved (a photo that is only in iCloud: the app never downloads from
+iCloud):
 
-**Settings.** Both are stored preferences with no screen yet (no UI was asked for):
+- after a **full** pass they are tried again at the next full pass (as in build 7);
+- after a **fast** pass, a photo that was **added** and could not be saved (it was not readable a moment ago, or it is only in iCloud)
+  keeps the old state, so the next run reads the same changes again and tries again. If it stays unsavable, the changes pile up until
+  more than 200 photos are listed and a full pass starts;
+- after a fast pass, a **changed old** photo that cannot be saved (typically it is only in iCloud; iCloud touches many such photos all
+  the time) does not hold the state back. It is tried again at the next full pass or when the photo changes again (for example when
+  iOS downloads it).
+
+**Settings.** Both are stored preferences with no screen yet (no UI was asked for), so they stay at their defaults until a screen is added:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -204,8 +211,9 @@ Photo back-up run (automatic): path=full (an album changed), I=0 U=2 C=1 D=0, 42
 ```
 
 `I` = photos added, `U` = photos changed, `C` = albums that matter, `D` = photos deleted, then the milliseconds of the whole run (it
-includes pausing and un-pausing the Syncthing folder). The arrival time on the PC is the file's creation time there minus the time the
-photo was taken.
+includes pausing and un-pausing the Syncthing folder). `result=` is `done`, `done, nothing to save`, `done, but an added photo could
+not be saved yet (tried again at the next run)`, `cancelled` or `error: ...`. The arrival time on the PC is the file's creation time
+there minus the time the photo was taken.
 
 Known limits of the fast path:
 
@@ -217,8 +225,11 @@ Known limits of the fast path:
    then saved in the album folder too by the full pass that the album change causes (it is in both folders, as a photo in two albums).
 4. The fast path pauses the Syncthing folder for the seconds it needs (as every pass does), then puts it back.
 
-Undo: `git revert --no-edit <the fast-path commits>` (they are listed in `patch/0004-fast-path.patch`) and push with `push_fork.ps1`.
-Or only switch it off without a new build: set `photoBackupFastPathMaxAssets` to 0.
+To watch it work: take a photo, wait about 10 seconds, open *Settings, Support, View log messages* and look for the last line that starts
+with `Photo back-up run`. On the PC the photo appears in the `No album` folder (or in the folder of its album) of the back-up folder.
+
+Undo: revert the fast-path commits, `git revert --no-edit 26326cc..HEAD` (26326cc is the build-7 commit just before them), and push with
+`push_fork.ps1`. The setting `photoBackupFastPathMaxAssets` = 0 would also switch the fast path off, but it has no screen yet.
 
 ## Self-test in the build
 
@@ -238,9 +249,10 @@ The step `photochange` does the same for `Sushitrain/PhotoChangePlan.swift` (the
 an old photo, many updates (exactly at the limit and one over), an album created / renamed / changed in membership, deletions alone,
 a deletion together with an insertion, a photo added and deleted again, an empty change list, change records with nothing that matters,
 an unreadable change list (expired saved state), duplicate and empty identifiers, another mode that ignores albums, the two settings
-and their limits, when the library state may be remembered (completed / failed / cancelled), the log line, and a story of several
-runs (a failed run is repeated, a cancelled full pass is repeated, a big change falls back to the full pass and the next single photo
-is fast again). To run it on a Mac:
+and their limits, when the library state may be remembered (completed / incomplete / failed / cancelled), how a fast pass ends (an
+added photo that could not be saved holds the state back, a changed old one does not), the log line, and a story of several
+runs (a failed run is repeated, a cancelled full pass is repeated, an unsaved new photo is tried again, a big change falls back to the
+full pass and the next single photo is fast again). To run it on a Mac:
 `swiftc -swift-version 6 -parse-as-library -o /tmp/selftest2 Sushitrain/PhotoChangePlan.swift tools/photochange_selftest/PhotoChangeSelfTest.swift && /tmp/selftest2`.
 
 ## Not proven yet

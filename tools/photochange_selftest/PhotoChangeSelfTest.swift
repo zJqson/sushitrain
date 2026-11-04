@@ -43,6 +43,12 @@ struct PhotoChangeSelfTest {
 				fail("\(what): expected \(expected) but got \(actual)")
 			}
 		}
+		func expectOutcome(_ actual: PhotoRunOutcome, _ expected: PhotoRunOutcome, _ what: String) {
+			checks += 1
+			if actual != expected {
+				fail("\(what): expected \(expected) but got \(actual)")
+			}
+		}
 
 		// ---- small helpers -------------------------------------------------------------------------------------------------
 
@@ -198,6 +204,27 @@ struct PhotoChangeSelfTest {
 		expectTrue(!PhotoChangePlanner.mayRememberLibraryState(plan: someFull, hadChanges: true, outcome: .cancelled), "full pass cancelled")
 		expectTrue(!PhotoChangePlanner.mayRememberLibraryState(plan: .nothing, hadChanges: true, outcome: .failed), "nothing to do but failed")
 		expectTrue(!PhotoChangePlanner.mayRememberLibraryState(plan: .nothing, hadChanges: true, outcome: .cancelled), "nothing to do but cancelled")
+		expectTrue(!PhotoChangePlanner.mayRememberLibraryState(plan: someFast, hadChanges: true, outcome: .incomplete), "fast pass incomplete")
+		expectTrue(!PhotoChangePlanner.mayRememberLibraryState(plan: someFull, hadChanges: true, outcome: .incomplete), "full pass incomplete")
+		expectTrue(!PhotoChangePlanner.mayRememberLibraryState(plan: .nothing, hadChanges: true, outcome: .incomplete), "nothing to do but incomplete")
+
+		// ---- 10b. How a fast pass ended ---------------------------------------------------------------------------------------------
+		func fastEnd(open: [String], inserted: [String], cancelled: Bool = false) -> PhotoRunOutcome {
+			return PhotoChangePlanner.fastPassOutcome(openAssetIDs: Set(open), inserted: Set(inserted), cancelled: cancelled)
+		}
+		expectOutcome(fastEnd(open: [], inserted: ["NEW"]), .completed, "everything saved")
+		expectOutcome(fastEnd(open: ["OLD"], inserted: ["NEW"]), .completed, "an old photo that could not be saved does not hold the state back")
+		expectOutcome(fastEnd(open: ["NEW"], inserted: ["NEW"]), .incomplete, "an added photo that could not be saved")
+		expectOutcome(fastEnd(open: ["OLD", "NEW"], inserted: ["NEW", "OTHER"]), .incomplete, "an old and an added photo that could not be saved")
+		expectOutcome(fastEnd(open: ["B"], inserted: ["A", "B"]), .incomplete, "one of two added photos could not be saved")
+		expectOutcome(fastEnd(open: ["OLD"], inserted: []), .completed, "only changed photos, one could not be saved")
+		expectOutcome(fastEnd(open: [], inserted: []), .completed, "nothing open, nothing added")
+		expectOutcome(fastEnd(open: [], inserted: ["NEW"], cancelled: true), .cancelled, "cancelled")
+		expectOutcome(fastEnd(open: ["NEW"], inserted: ["NEW"], cancelled: true), .cancelled, "cancelled with an open added photo")
+		expectEqual(PhotoChangePlanner.describeOutcome(.completed), "done", "describe completed")
+		expectTrue(PhotoChangePlanner.describeOutcome(.incomplete).hasPrefix("done, but an added photo"), "describe incomplete")
+		expectEqual(PhotoChangePlanner.describeOutcome(.cancelled), "cancelled", "describe cancelled")
+		expectEqual(PhotoChangePlanner.describeOutcome(.failed), "failed", "describe failed")
 
 		// ---- 11. The log line -----------------------------------------------------------------------------------------------------
 		expectEqual(PhotoChangePlanner.describe(.nothing), "nothing to do", "describe nothing")
@@ -306,6 +333,25 @@ struct PhotoChangeSelfTest {
 		happen(input(deleted: ["P5"]))
 		expectPlan(run(.completed), .nothing, "story: added and deleted before the run")
 		expectInt(library.saved, 11, "story: both records are remembered")
+
+		// the fast pass could not save a new photo (it was not readable a moment ago): the state is kept and the photo is tried again
+		happen(input(inserted: ["P6"], updated: ["OLD-CLOUD"]))
+		let sixthSeen = readChanges()
+		let sixthEnd = PhotoChangePlanner.fastPassOutcome(openAssetIDs: ["P6", "OLD-CLOUD"], inserted: sixthSeen.inserted, cancelled: false)
+		expectOutcome(sixthEnd, .incomplete, "story: the new photo could not be saved")
+		expectPlan(run(sixthEnd), .only(["P6", "OLD-CLOUD"]), "story: the run looked at the new and the changed photo")
+		expectInt(library.saved, 11, "story: an incomplete pass remembers nothing")
+		happen(input(inserted: ["P7"]))
+		expectPlan(run(.completed), .only(["P6", "OLD-CLOUD", "P7"]), "story: the unsaved photo is tried again with the next one")
+		expectInt(library.saved, 13, "story: now it is remembered")
+
+		// a changed old photo that is only in iCloud does not hold the state back
+		happen(input(updated: ["OLD-CLOUD"]))
+		let cloudSeen = readChanges()
+		let cloudEnd = PhotoChangePlanner.fastPassOutcome(openAssetIDs: ["OLD-CLOUD"], inserted: cloudSeen.inserted, cancelled: false)
+		expectOutcome(cloudEnd, .completed, "story: an old photo that is only in iCloud")
+		expectPlan(run(cloudEnd), .only(["OLD-CLOUD"]), "story: the old photo was looked at")
+		expectInt(library.saved, 14, "story: and the state moved on")
 
 		print("photo change self-test: \(checks) checks, \(failures) failed")
 		exit(failures == 0 ? 0 : 1)

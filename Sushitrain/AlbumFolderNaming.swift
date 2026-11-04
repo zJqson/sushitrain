@@ -420,6 +420,18 @@ final class AlbumExportLedger: @unchecked Sendable {
 	var adoptedCount: Int { return locked { adoptedTotal } }
 	/// Files announced with `expect` and not finished (yet): not zero after a run means something could not be saved.
 	var openCount: Int { return locked { openKeys.count } }
+	/// The photos and videos (their identifiers) that have a file announced with `expect` and not finished (yet).
+	var openAssetIDs: Set<String> {
+		return locked { () -> Set<String> in
+			var result = Set<String>()
+			for key in openKeys {
+				if let bar = key.firstIndex(of: "|") {
+					result.insert(String(key[key.startIndex..<bar]))
+				}
+			}
+			return result
+		}
+	}
 	var lastSaveError: String? { return locked { lastError } }
 	/// False when the ledger file exists but could not be read (see `load`): the back-up must not go on, and nothing is ever written
 	/// over that file.

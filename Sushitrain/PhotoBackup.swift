@@ -325,6 +325,8 @@ enum PhotoBackupProgress {
 			// Fork: album mode, automatic run: the photos the library reported as added or changed, when only those need a look
 			// (nil = look at all albums, as the manual button always does)
 			var fastPathIDs: Set<String>? = nil
+			// ... and which of them were ADDED (a file of an added photo that cannot be saved holds the library state back)
+			var fastPathAddedIDs = Set<String>()
 			let changeToken = PHPhotoLibrary.shared().currentChangeToken
 			Log.info("Current change token: \(changeToken)")
 			if !everyAlbum {
@@ -384,6 +386,7 @@ enum PhotoBackupProgress {
 
 					case .only(let changedIDs):
 						fastPathIDs = changedIDs
+						fastPathAddedIDs = changes.inserted
 
 					case .full:
 						break
@@ -455,23 +458,24 @@ enum PhotoBackupProgress {
 			// Fork: album mode: one pass over every user album, each album saved in a folder with its name. The fast path (automatic
 			// run, only some photos were added or changed, no album changed) looks at those photos only.
 			if everyAlbum {
-				let complete: Bool
+				let outcome: PhotoRunOutcome
 				do {
 					if let changedIDs = fastPathIDs {
-						complete = try await self.backupChangedAssets(
+						outcome = try await self.backupChangedAssets(
 							appState: appState,
 							folder: folder,
 							folderURL: folderURL,
 							subDirectoryPath: subDirectoryPath,
 							destination: ledgerDestination,
 							assetIDs: changedIDs,
+							addedIDs: fastPathAddedIDs,
 							categories: categories,
 							includeAllBurstAssets: includeAllBurstAssets,
 							isInBackground: isInBackground
 						)
 					}
 					else {
-						complete = try await self.backupEveryAlbum(
+						let complete = try await self.backupEveryAlbum(
 							appState: appState,
 							folder: folder,
 							folderURL: folderURL,
@@ -482,18 +486,19 @@ enum PhotoBackupProgress {
 							includeAllBurstAssets: includeAllBurstAssets,
 							isInBackground: isInBackground
 						)
+						outcome = complete ? .completed : .cancelled
 					}
 				}
 				catch {
 					runResult = "error: \(error.localizedDescription)"
 					throw error
 				}
-				runResult = complete ? "done" : "cancelled"
-				// Remember the library state when the pass ran to the end (not cancelled, no error). Files that could not be saved (for
-				// example photos that are only in iCloud) are tried again at the next full pass (a change in an album, the manual
-				// button) or when the photo changes again.
-				let remember = PhotoChangePlanner.mayRememberLibraryState(
-					plan: runReport.plan, hadChanges: true, outcome: complete ? .completed : .cancelled)
+				runResult = PhotoChangePlanner.describeOutcome(outcome)
+				// Remember the library state when the pass ran to the end (not cancelled, no error). After a full pass, files that could
+				// not be saved (for example photos that are only in iCloud) are tried again at the next full pass (a change in an
+				// album, the manual button) or when the photo changes again. A fast pass that could not save an ADDED photo keeps the
+				// old state, so the next run reads the same changes again and tries again (see PhotoChangePlanner.fastPassOutcome).
+				let remember = PhotoChangePlanner.mayRememberLibraryState(plan: runReport.plan, hadChanges: true, outcome: outcome)
 				if remember {
 					DispatchQueue.main.async {
 						self.lastSuccessfulChangeToken = changeToken
@@ -761,8 +766,10 @@ enum PhotoBackupProgress {
 	// that the library reported as added or changed are looked at, and no album changed. For each of them the user albums it is in are
 	// found (none = the folder "No album"); then the same per-album code as the full pass (backupAlbum, with the ledger) saves what is
 	// missing, narrowed down to those photos. The ledger knows what is saved already, so a changed old photo costs nothing.
-	// Returns true when the pass ran to the end (it was not cancelled): then the caller remembers the library change token. A pass that
-	// fails with an error throws instead; then the token is not remembered and the next run reads the same changes again.
+	// Returns how the pass ended (PhotoChangePlanner.fastPassOutcome): the caller remembers the library change token only for `.completed`.
+	// `.incomplete` = a photo that was ADDED (`addedIDs`) could not be saved yet, so the next run reads the same changes again and tries
+	// again; a changed old photo that cannot be saved (typically it is only in iCloud) does not hold the token back. A pass that fails
+	// with an error throws instead; then the token is not remembered either.
 	private nonisolated func backupChangedAssets(
 		appState: AppState,
 		folder: SushitrainFolder,
@@ -770,10 +777,11 @@ enum PhotoBackupProgress {
 		subDirectoryPath: EntryPath,
 		destination: String,
 		assetIDs: Set<String>,
+		addedIDs: Set<String>,
 		categories: Set<PhotoBackupCategory>,
 		includeAllBurstAssets: Bool,
 		isInBackground: Bool
-	) async throws -> Bool {
+	) async throws -> PhotoRunOutcome {
 		let ledgerURL = try albumLedgerFileURL(destination: destination)
 		let ledger = AlbumExportLedger.load(destination: destination, fileURL: ledgerURL)
 		Log.info("Album back-up (fast path): ledger \(ledgerURL.lastPathComponent): \(ledger.loadNote)")
@@ -889,12 +897,13 @@ enum PhotoBackupProgress {
 			DispatchQueue.main.async { self.progress = .error(message) }
 			throw error
 		}
-		if Task.isCancelled { return false }
+		if Task.isCancelled { return .cancelled }
 
 		let notSaved = ledger.openCount
+		let addedNotSaved = ledger.openAssetIDs.intersection(addedIDs).count
 		if notSaved > 0 {
 			Log.warn(
-				"Album back-up (fast path): \(notSaved) files could not be saved this time (for example photos that are only in iCloud). They are tried again at the next full pass (an album changed, or 'Back-up new photos') or when the photo changes again."
+				"Album back-up (fast path): \(notSaved) files could not be saved this time, \(addedNotSaved) of them of added photos. Added photos are tried again at the next run; changed old photos (for example photos that are only in iCloud) at the next full pass (an album changed, or 'Back-up new photos') or when the photo changes again."
 			)
 		}
 		let savedCount = ledger.completedCount
@@ -903,7 +912,7 @@ enum PhotoBackupProgress {
 			self.lastCompletedDate = completedDate
 			self.progress = .finished(savedAssets: savedCount, purgedAssets: nil)
 		}
-		return true
+		return PhotoChangePlanner.fastPassOutcome(openAssetIDs: ledger.openAssetIDs, inserted: addedIDs, cancelled: false)
 	}
 
 	private nonisolated func backupAlbum(
