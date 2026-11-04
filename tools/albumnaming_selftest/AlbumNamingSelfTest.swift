@@ -291,6 +291,28 @@ struct AlbumNamingSelfTest {
 		let missing = AlbumExportLedger.load(destination: "d", fileURL: dir3.appendingPathComponent("nothing-here.json"))
 		expectTrue(missing.savedItemCount == 0 && missing.loadNote.contains("no ledger file"), "missing file: \(missing.loadNote)")
 
+		// 22b. A ledger file that exists but cannot be read (the phone was not unlocked since it started) is not "damaged": the
+		//      back-up must not go on with an empty ledger, and the real file must never be overwritten or moved aside
+		let dir4 = FileManager.default.temporaryDirectory.appendingPathComponent("albumnaming-selftest-" + UUID().uuidString)
+		let url4 = dir4.appendingPathComponent("ledger.json")
+		let real = AlbumExportLedger(destination: "d", fileURL: url4)
+		real.markAdopted(key: "A|B|photo", relativePath: "F/1.HEIC")
+		expectTrue(real.saveNow() && FileManager.default.fileExists(atPath: url4.path), "a real ledger file is written")
+		try? FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url4.path)
+		if !FileManager.default.isReadableFile(atPath: url4.path) {
+			let closed = AlbumExportLedger.load(destination: "d", fileURL: url4)
+			expectTrue(!closed.isUsable && closed.loadNote.contains("cannot be read right now"), "unreadable file: \(closed.loadNote)")
+			closed.markAdopted(key: "X|Y|photo", relativePath: "G/2.HEIC")
+			expectTrue(!closed.saveNow() && closed.lastSaveError != nil, "an unreadable ledger is never written over")
+			expectTrue(!FileManager.default.fileExists(atPath: url4.appendingPathExtension("damaged").path), "an unreadable file is not moved aside")
+			try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url4.path)
+			let opened = AlbumExportLedger.load(destination: "d", fileURL: url4)
+			expectTrue(opened.isUsable && opened.isDone("A|B|photo") && !opened.isDone("X|Y|photo"), "the real ledger is still there: \(opened.loadNote)")
+		}
+		else {
+			print("note: this account can read files with no permission (root?), the unreadable-ledger check was skipped")
+		}
+
 		// 23. A whole story with the real planning code (the same calls the back-up makes, with a pretend photo library and a
 		//     pretend disk): a first pass, a second pass that must save nothing, a second photo with the same file name, a renamed
 		//     album, a crash in the middle of a file, a restart, and "Re-copy all photos".

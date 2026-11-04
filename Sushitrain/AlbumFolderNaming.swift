@@ -330,6 +330,7 @@ final class AlbumExportLedger: @unchecked Sendable {
 	private var adoptedTotal = 0
 	private var lastError: String? = nil
 	private var note = ""
+	private var unreadable = false
 
 	/// "Re-copy all photos": nothing counts as done, everything is saved again (to the same names).
 	var ignoreExisting = false
@@ -352,8 +353,18 @@ final class AlbumExportLedger: @unchecked Sendable {
 			ledger.note = "no ledger file yet, starting empty"
 			return ledger
 		}
+		// A file that exists but cannot be read is NOT a damaged file: iOS keeps app files closed until the phone has been unlocked once
+		// after it started. Going on with an empty ledger would replace the real one at the next save, so say "not usable" instead.
+		let data: Data
 		do {
-			let data = try Data(contentsOf: fileURL)
+			data = try Data(contentsOf: fileURL)
+		}
+		catch {
+			ledger.unreadable = true
+			ledger.note = "ledger file cannot be read right now (\(error.localizedDescription))"
+			return ledger
+		}
+		do {
 			let stored = try JSONDecoder().decode(Stored.self, from: data)
 			if stored.version != fileFormatVersion {
 				ledger.note = "ledger file has version \(stored.version), expected \(fileFormatVersion): starting empty"
@@ -397,6 +408,9 @@ final class AlbumExportLedger: @unchecked Sendable {
 	/// Files announced with `expect` and not finished (yet): not zero after a run means something could not be saved.
 	var openCount: Int { return locked { openKeys.count } }
 	var lastSaveError: String? { return locked { lastError } }
+	/// False when the ledger file exists but could not be read (see `load`): the back-up must not go on, and nothing is ever written
+	/// over that file.
+	var isUsable: Bool { return locked { !unreadable } }
 
 	func isDone(_ key: String) -> Bool {
 		return locked {
@@ -552,6 +566,10 @@ final class AlbumExportLedger: @unchecked Sendable {
 		guard let url = fileURL else {
 			unsavedCount = 0
 			return true
+		}
+		if unreadable {
+			lastError = "the ledger file could not be read, so it is not overwritten"
+			return false
 		}
 		do {
 			let stored = Stored(

@@ -336,11 +336,25 @@ enum PhotoBackupProgress {
 				}
 			}
 
-			// Pause the folder while backing up so we can change selection state
-			let folderWasPaused = folder.isPaused()
+			// Pause the folder while backing up so we can change selection state.
+			// Fork: the pause is saved in Syncthing's configuration. When iOS ends the app in the middle of a run, the folder stays
+			// paused, and the next run would think "it was paused before" and keep it paused for good. So the app notes in its
+			// preferences that IT paused the folder, and removes the note when it has put the folder back.
+			let pausedByAppKey = "photoBackupFolderPausedByApp"
+			let leftPausedByApp = UserDefaults.standard.string(forKey: pausedByAppKey) == selectedFolderID
+			let folderWasPaused = folder.isPaused() && !leftPausedByApp
+			if leftPausedByApp {
+				Log.warn("Photo back-up: an earlier run did not finish and left the folder paused; it is put back at the end of this run")
+			}
+			if !folderWasPaused {
+				UserDefaults.standard.set(selectedFolderID, forKey: pausedByAppKey)
+			}
 			try folder.setPaused(true)
 			defer {
 				try? folder.setPaused(folderWasPaused)
+				if !folderWasPaused {
+					UserDefaults.standard.removeObject(forKey: pausedByAppKey)
+				}
 			}
 
 			// Get local path for destination folder
@@ -491,6 +505,13 @@ enum PhotoBackupProgress {
 		let ledger = AlbumExportLedger.load(destination: destination, fileURL: ledgerURL)
 		ledger.ignoreExisting = fullExport
 		Log.info("Album back-up: ledger \(ledgerURL.lastPathComponent): \(ledger.loadNote)")
+		if !ledger.isUsable {
+			// The ledger file exists but cannot be read right now (for example the phone has not been unlocked since it was
+			// restarted). Going on with an empty one would replace the real one, so stop here; the next run tries again.
+			let message = String(localized: "The list of saved photos cannot be read right now. This is tried again later.")
+			DispatchQueue.main.async { self.progress = .error(message) }
+			throw CocoaError(.fileReadNoPermission)
+		}
 		defer { ledger.saveNow() }
 
 		// All user albums, and the folder name each one is saved in (names given in earlier runs are kept)

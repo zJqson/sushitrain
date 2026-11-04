@@ -135,9 +135,15 @@ Known limits:
    the next change in the library.
 5. The first run on a big library takes a long time (iOS may stop it; it continues at the next trigger, starting where the ledger
    says). Keep the app open and the phone charging for the first run.
-6. From reading the code (not tested): the existing back-up pauses the Syncthing folder while it works and puts it back at the end.
-   If iOS kills the app in the middle of a run, the folder may stay paused. The original app behaves like this too and album mode does
-   not change it. If photos stop arriving after a crash, check that the folder is not paused.
+6. The back-up pauses the Syncthing folder while it works and puts it back at the end. The pause is saved in Syncthing's
+   configuration, so when iOS ends the app in the middle of a run (a long first album run makes that likely) the folder stays paused,
+   and the original app would then keep it paused for good ("it was paused before"). The fork notes in the app's preferences that
+   it paused the folder itself (`photoBackupFolderPausedByApp`) and un-pauses it at the end of the next run. A folder that YOU
+   paused is never un-paused. This recovery is written from reading the Go core (`SetPaused` saves the config); it was not run on a
+   phone.
+7. A ledger file that exists but cannot be read (iOS keeps app files closed until the phone is unlocked once after a restart) stops
+   the run with a message instead of starting an empty ledger; the next run tries again. A file that is really damaged is moved
+   aside as `.damaged` and a new ledger is started (files already in the folder are then recognised, not saved again).
 
 Undo: `git revert <the album-folders commit>` (see the commit list) and push with `push_fork.ps1`; the ledger files become unused.
 
