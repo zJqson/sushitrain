@@ -105,6 +105,23 @@ jobs:
             "$T/selftest"
           } 2>&1 | tee -a "$BUILD_LOG"
 
+      - id: photochange
+        name: Self-test of the photo change planner (plain swiftc, seconds)
+        # The fast path of the automatic photo back-up decides in Sushitrain/PhotoChangePlan.swift (no Photos / UIKit imports) whether a
+        # library change needs a look at one new photo or at everything. This compiles that file together with a self-test program
+        # (tools/photochange_selftest) and runs it. A compile error or a failed check ("ERROR: ..." lines) stops the build here, in
+        # seconds, before the long Go and Xcode steps.
+        timeout-minutes: 5
+        run: |
+          {
+            echo "=== photo change planner self-test ($(date -u +%H:%M:%SZ)) ==="
+            T="$RUNNER_TEMP/photochange-selftest"
+            mkdir -p "$T"
+            xcrun swiftc -swift-version 6 -parse-as-library -o "$T/selftest" \
+              Sushitrain/PhotoChangePlan.swift tools/photochange_selftest/PhotoChangeSelfTest.swift
+            "$T/selftest"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
       - id: platform
         name: Install the iOS platform (upstream does this too)
         # soft step: if the platform is already on the image or the download fails, the archive step is the real judge
@@ -268,6 +285,7 @@ jobs:
             checkout=${{ steps.checkout.conclusion }}
             xcode=${{ steps.xcode.conclusion }}
             albumnaming=${{ steps.albumnaming.conclusion }}
+            photochange=${{ steps.photochange.conclusion }}
             platform=${{ steps.platform.conclusion }}
             go=${{ steps.go.conclusion }}
             identity=${{ steps.identity.conclusion }}

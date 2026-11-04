@@ -103,9 +103,10 @@ album (the folder hierarchy is not copied; same names get ` (2)`); this was not 
   "No album (2)"). The same rules are used for file names; two different photos with the same file name in one folder: the second
   one gets `_` and the first 6 letters/digits of its identifier (`IMG_0001_9F2D7C.HEIC`); only on a clash. All of this is in the
   one pure file `Sushitrain/AlbumFolderNaming.swift` (Foundation only; it can be reused for other folder names).
-- **What is saved when.** Every change in the photo library (a new photo, a photo put in an album, a new album, ...) triggers one
-  look at all albums (the existing automatic back-up trigger is used, nothing new runs in the background). Only what is missing is
-  saved. What was saved is written in a small file, the *ledger* (`PhotoAlbumLedger-<hash>.json` in the app's Application Support
+- **What is saved when.** Every change in the photo library (a new photo, a photo put in an album, a new album, ...) starts the
+  existing automatic back-up trigger (nothing new runs in the background). A new photo is looked at alone (the *fast path*, see
+  "Fast path for new photos" below); a change to an album, a big change or a change list that cannot be read makes one look at all
+  albums. Only what is missing is saved. What was saved is written in a small file, the *ledger* (`PhotoAlbumLedger-<hash>.json` in the app's Application Support
   folder; one per back-up folder + path). Photos, videos and the videos of Live Photos are written to a temporary file first and get
   their real name only when complete (so a kill never leaves half a file under a real name that a later run would take for a
   finished one). A key `photo id|album id|photo/video/live` is added only after its file is in place,
@@ -162,7 +163,66 @@ First run, step by step:
 Undo: revert all album-folder commits, `git revert --no-edit 169be91..HEAD` (169be91 is the commit just before them), and push with
 `push_fork.ps1`; the ledger files become unused.
 
+## Fast path for new photos
+
+Until build 7, every change in the photo library (even one new photo) made the automatic back-up look at ALL albums again. On the
+real iPhone (10,027 items, about 8,500 of them only in iCloud) such a pass that saved nothing took about 7 minutes, and the
+Syncthing folder is paused during a pass, so the PC could fetch nothing meanwhile. Now an automatic run first asks Photos *what*
+changed (`PHPhotoLibrary.fetchPersistentChanges`) and decides (the decision is the pure file `Sushitrain/PhotoChangePlan.swift`):
+
+| What Photos reports since the last good run | What the app does |
+|---|---|
+| Only photos or videos added or changed (up to 200), and no album changed | **Fast path.** Looks at those photos only. For each one it finds the user albums it is in (none = `No album`) and runs the normal album code for those (photo, album) pairs. The ledger decides what is saved already, so a changed old photo costs nothing. |
+| Only deletions on the phone (or a photo added and deleted again) | Nothing to do. Deleting on the phone never deletes on the PC. |
+| An album changed: created, renamed, a photo put in or taken out, deleted | **Full pass** over all albums, as before. A photo can be put in an album without being changed itself, so only a full look finds it. |
+| The list of changes cannot be read (the saved library state expired, Photos refuses) | Full pass. |
+| More than 200 photos changed at once (for example iCloud touching many photos) | Full pass. |
+| The button *Back-up new photos*, *Re-copy all photos*, the very first run | Always the full pass (unchanged). |
+
+Smart albums (Recents, Favorites, ...), iCloud Shared Albums and other collections the back-up never looks at do not count as an
+album change. An album that cannot be found any more (deleted) does.
+
+**When the library state is remembered.** After a fast or full pass the app remembers the state of the library, so the next run reads
+only newer changes. It does that only when the pass ended without an error and was not cancelled; otherwise the next trigger reads
+the same changes again and tries again. A file that could not be saved in a pass that ended normally (a photo that is only in iCloud:
+the app never downloads from iCloud) is not retried by later fast runs; it is tried again at the next full pass or when the photo
+changes again (for example when iOS downloads it).
+
+**Settings.** Both are stored preferences with no screen yet (no UI was asked for):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `photoBackupQuietSeconds` | 8 (was a fixed 20) | Seconds the app waits after the LAST change in the library before it runs. Used range 3 to 120. Every new change restarts the wait, so a burst of photos or a Live Photo that Photos is still finishing is not exported half-written. |
+| `photoBackupFastPathMaxAssets` | 200 | Most changed photos the fast path takes. More than that means a full pass. 0 switches the fast path off (always the full pass, as in build 7). Used range 0 to 5000. |
+
+**The log.** *Settings, Support, View log messages* has one line per run in album mode, written when the run ends (also after an
+error or a cancel), for example:
+
+```
+Photo back-up run (automatic): path=fast (1 photo), I=1 U=0 C=0 D=0, 1850 ms, result=done
+Photo back-up run (automatic): path=full (an album changed), I=0 U=2 C=1 D=0, 421000 ms, result=done
+```
+
+`I` = photos added, `U` = photos changed, `C` = albums that matter, `D` = photos deleted, then the milliseconds of the whole run (it
+includes pausing and un-pausing the Syncthing folder). The arrival time on the PC is the file's creation time there minus the time the
+photo was taken.
+
+Known limits of the fast path:
+
+1. A renamed album still gets a new folder (a rename is an album change, so it is a full pass; the files already saved stay in the
+   old folder, see "Known limits" above).
+2. Not run on a phone yet. How Photos fills `PHPersistentChange` for a real new photo (which albums it lists as changed, how many photos
+   iCloud touches) is the thing to read in the log: if every run says `path=full (...)`, the reason in the brackets says why.
+3. A photo that is put into an album a moment after it was taken is first saved in `No album` (if the run happens in between) and is
+   then saved in the album folder too by the full pass that the album change causes (it is in both folders, as a photo in two albums).
+4. The fast path pauses the Syncthing folder for the seconds it needs (as every pass does), then puts it back.
+
+Undo: `git revert --no-edit <the fast-path commits>` (they are listed in `patch/0004-fast-path.patch`) and push with `push_fork.ps1`.
+Or only switch it off without a new build: set `photoBackupFastPathMaxAssets` to 0.
+
 ## Self-test in the build
+
+There are two fast self-tests before the long steps. The first is `albumnaming`, the second `photochange` (see below).
 
 The workflow step `albumnaming` (before the long steps) compiles `Sushitrain/AlbumFolderNaming.swift` together with
 `tools/albumnaming_selftest/AlbumNamingSelfTest.swift` using the plain `swiftc` of the runner and runs it. It checks every naming
@@ -173,8 +233,23 @@ same file name, a renamed album, a crash in the middle of a file, a restart, "Re
 starting with `ERROR:` and stops the build in seconds. To run it on a Mac:
 `swiftc -swift-version 6 -parse-as-library -o /tmp/selftest Sushitrain/AlbumFolderNaming.swift tools/albumnaming_selftest/AlbumNamingSelfTest.swift && /tmp/selftest`.
 
+The step `photochange` does the same for `Sushitrain/PhotoChangePlan.swift` (the fast-path decision) with
+`tools/photochange_selftest/PhotoChangeSelfTest.swift`: a new photo alone, a new photo plus an update of the same photo, an update of
+an old photo, many updates (exactly at the limit and one over), an album created / renamed / changed in membership, deletions alone,
+a deletion together with an insertion, a photo added and deleted again, an empty change list, change records with nothing that matters,
+an unreadable change list (expired saved state), duplicate and empty identifiers, another mode that ignores albums, the two settings
+and their limits, when the library state may be remembered (completed / failed / cancelled), the log line, and a story of several
+runs (a failed run is repeated, a cancelled full pass is repeated, a big change falls back to the full pass and the next single photo
+is fast again). To run it on a Mac:
+`swiftc -swift-version 6 -parse-as-library -o /tmp/selftest2 Sushitrain/PhotoChangePlan.swift tools/photochange_selftest/PhotoChangeSelfTest.swift && /tmp/selftest2`.
+
 ## Not proven yet
 
 The first compile of the fork (Go core, Xcode project, workflow) succeeded (run 1). The album-folder mode was written without a
 compiler on hand: the build logs on the `build-logs` branch are its first compile. It was **not** run on a phone: real album
 names, big libraries, Live Photos, the look at all albums after a real change and the iOS kill/restart behaviour are all untested.
+
+The fast path ("Fast path for new photos") was also written without a compiler on hand. Its decision file is covered by the CI
+self-test; the Photos glue only compiled. Not run on a phone: what `PHPersistentChange` really lists for a new photo (photos, albums,
+smart albums), the lookup of the albums a changed photo is in (`fetchAssetCollections(containing:)`), the fetch narrowed to the
+changed photos, the fallback rules and the timing (the log line shows it).

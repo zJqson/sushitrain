@@ -203,6 +203,12 @@ enum PhotoBackupProgress {
 	@AppStorage("photoBackupTimeZone") var timeZone: PhotoBackupTimeZone = .current
 	@AppStorage("photoBackupLastSuccessfulChangeToken") var lastSuccessfullChangeTokenData: Data = Data()
 
+	// Fork: the fast path of the automatic back-up (see PhotoChangePlan.swift and README_FORK.md). There is no screen for these two yet.
+	// Seconds the automatic back-up waits after the LAST change in the photo library before it starts (used range 3...120).
+	@AppStorage("photoBackupQuietSeconds") var quietSecondsSetting: Int = PhotoChangePlanner.defaultQuietSeconds
+	// Most photos the fast path looks at; with more changed photos (or when an album changed) all albums are looked at. 0 = fast path off.
+	@AppStorage("photoBackupFastPathMaxAssets") var fastPathMaxAssetsSetting: Int = PhotoChangePlanner.defaultFastPathMaxAssets
+
 	// Whether to replace or append the ".MOV" file extension for live photos
 	@AppStorage("photoBackupLivePhotoReplaceExtension") var livePhotoReplaceExtension: Bool = false
 
@@ -220,6 +226,9 @@ enum PhotoBackupProgress {
 		}
 		return nil
 	}
+
+	// Fork: the wait before an automatic run, brought into the allowed range (3...120 seconds)
+	var quietSeconds: Int { return PhotoChangePlanner.clampQuietSeconds(self.quietSecondsSetting) }
 
 	var isReady: Bool { return !self.selectedAlbumID.isEmpty && !self.selectedFolderID.isEmpty }
 
@@ -250,6 +259,8 @@ enum PhotoBackupProgress {
 		// Fork: album mode ("Every album"): the ledger of what was saved is valid for one destination (folder + path in it)
 		let everyAlbum = (selectedAlbumID == PhotoBackup.everyAlbumIdentifier)
 		let ledgerDestination = selectedFolderID + "|" + self.subDirectoryPath
+		// Fork: the fast path looks at no more than this many changed photos (see PhotoChangePlan.swift)
+		let fastPathMaxAssets = PhotoChangePlanner.clampFastPathMaxAssets(self.fastPathMaxAssetsSetting)
 
 		// Start the actual synchronization task
 		self.photoBackupTask = Task.detached(priority: .background) {
@@ -259,6 +270,18 @@ enum PhotoBackupProgress {
 				DispatchQueue.main.async {
 					self.photoBackupTask = nil
 					self.isBackingUp = false
+				}
+			}
+
+			// Fork: album mode: ONE line in the log per run (how it was started, which path it took and why, what the library reported,
+			// how long it took, how it ended). It is written when the run ends, also when the run fails or is cancelled.
+			let runStarted = DispatchTime.now().uptimeNanoseconds
+			var runReport = PhotoRunReport(trigger: fullExport ? "re-copy all" : (isInBackground ? "automatic" : "by hand"))
+			var runResult = "stopped before the pass (see the lines above)"
+			defer {
+				if everyAlbum {
+					let milliseconds = Int((DispatchTime.now().uptimeNanoseconds - runStarted) / 1_000_000)
+					Log.info(runReport.logLine(milliseconds: milliseconds, result: runResult))
 				}
 			}
 
@@ -299,23 +322,76 @@ enum PhotoBackupProgress {
 
 			// Check to see if anything changed at all
 			var onlyTheseLocalIdentifiers: Set<String>? = nil
+			// Fork: album mode, automatic run: the photos the library reported as added or changed, when only those need a look
+			// (nil = look at all albums, as the manual button always does)
+			var fastPathIDs: Set<String>? = nil
 			let changeToken = PHPhotoLibrary.shared().currentChangeToken
 			Log.info("Current change token: \(changeToken)")
+			if !everyAlbum {
+				runReport.plan = .full(reason: "not album mode")
+			}
+			else if fullExport {
+				runReport.plan = .full(reason: "re-copy all photos")
+			}
+			else if !isInBackground {
+				runReport.plan = .full(reason: "started by hand")
+			}
+			else {
+				runReport.plan = .full(reason: "no saved library state yet (first run)")
+			}
 			if let lastSuccessfulChangeToken = await self.lastSuccessfulChangeToken {
 				Log.info("Last change token: \(lastSuccessfulChangeToken)")
-				// Album mode: when the user presses "Back-up new photos" himself, always look at all albums (also retries files that
-				// could not be saved before); the automatic runs stop here when nothing changed in the library
-				if !fullExport && !(everyAlbum && !isInBackground) {
+				if everyAlbum && isInBackground && !fullExport {
+					// Fork: album mode, automatic run: find out WHAT changed, then look at as little as possible (PhotoChangePlan.swift).
+					// A new photo needs a look at that photo only. A changed album (renamed, a photo put in it, ...), a change list that
+					// cannot be read or too many changed photos need the look at all albums that was always made here. When the user
+					// presses "Back-up new photos" himself (isInBackground is false), all albums are always looked at (this also
+					// retries files that could not be saved before).
+					var changes = PhotoChangeInput()
 					do {
-						// Album mode: a photo can be put in an album later without being changed itself, so ANY change in the
-						// library means "look at all albums again" (the list of photos is not narrowed down to the changed ones)
-						let ids: Set<String>
-						if everyAlbum {
-							ids = try self.anyLibraryChange(since: lastSuccessfulChangeToken)
+						changes = try self.classifyLibraryChanges(since: lastSuccessfulChangeToken)
+					}
+					catch PHPhotosError.persistentChangeTokenExpired,
+						PHPhotosError.persistentChangeDetailsUnavailable
+					{
+						Log.warn("Persistent change token expired or details unavailable; resetting the saved change token")
+						changes.unreadableReason = "the saved library state has expired"
+						DispatchQueue.main.async {
+							self.lastSuccessfulChangeToken = nil
 						}
-						else {
-							ids = try self.insertedOrUpdatedLocalIdentifiers(since: lastSuccessfulChangeToken, to: changeToken)
+					}
+					catch {
+						Log.warn("Photo back-up: the list of library changes cannot be read: \(error.localizedDescription)")
+						changes.unreadableReason = "reading it failed"
+					}
+					let decision = PhotoChangePlanner.plan(changes, maxAssets: fastPathMaxAssets)
+					runReport.record(input: changes, plan: decision)
+					switch decision {
+					case .nothing:
+						// FIXME: we are skipping purge here
+						Log.info("Nothing changed that needs a back-up (not a full export), finishing early!")
+						runResult = "done, nothing to save"
+						let remember = PhotoChangePlanner.mayRememberLibraryState(
+							plan: decision, hadChanges: changes.hasAnyChange, outcome: .completed)
+						DispatchQueue.main.async {
+							self.progress = .finished(savedAssets: nil, purgedAssets: nil)
+							self.lastCompletedDate = Date.now.timeIntervalSinceReferenceDate
+							if remember {
+								self.lastSuccessfulChangeToken = changeToken
+							}
 						}
+						return
+
+					case .only(let changedIDs):
+						fastPathIDs = changedIDs
+
+					case .full:
+						break
+					}
+				}
+				else if !everyAlbum && !fullExport {
+					do {
+						let ids = try self.insertedOrUpdatedLocalIdentifiers(since: lastSuccessfulChangeToken, to: changeToken)
 						if ids.isEmpty {
 							// FIXME: we are skipping purge here
 							Log.info("Nothing changed and not a full export, finishing early!")
@@ -325,7 +401,7 @@ enum PhotoBackupProgress {
 							}
 							return
 						}
-						onlyTheseLocalIdentifiers = everyAlbum ? nil : ids
+						onlyTheseLocalIdentifiers = ids
 					}
 					catch PHPhotosError.persistentChangeTokenExpired,
 						PHPhotosError.persistentChangeDetailsUnavailable
@@ -376,22 +452,49 @@ enum PhotoBackupProgress {
 
 			let folderURL = URL(fileURLWithPath: folderPath)
 
-			// Fork: album mode: one pass over every user album, each album saved in a folder with its name
+			// Fork: album mode: one pass over every user album, each album saved in a folder with its name. The fast path (automatic
+			// run, only some photos were added or changed, no album changed) looks at those photos only.
 			if everyAlbum {
-				let complete = try await self.backupEveryAlbum(
-					appState: appState,
-					folder: folder,
-					folderURL: folderURL,
-					subDirectoryPath: subDirectoryPath,
-					destination: ledgerDestination,
-					fullExport: fullExport,
-					categories: categories,
-					includeAllBurstAssets: includeAllBurstAssets,
-					isInBackground: isInBackground
-				)
-				// Remember the library state when the pass ran to the end (not cancelled). Files that could not be saved (for example
-				// photos that are only in iCloud) are tried again at the next change in the library or at the next manual run.
-				if complete {
+				let complete: Bool
+				do {
+					if let changedIDs = fastPathIDs {
+						complete = try await self.backupChangedAssets(
+							appState: appState,
+							folder: folder,
+							folderURL: folderURL,
+							subDirectoryPath: subDirectoryPath,
+							destination: ledgerDestination,
+							assetIDs: changedIDs,
+							categories: categories,
+							includeAllBurstAssets: includeAllBurstAssets,
+							isInBackground: isInBackground
+						)
+					}
+					else {
+						complete = try await self.backupEveryAlbum(
+							appState: appState,
+							folder: folder,
+							folderURL: folderURL,
+							subDirectoryPath: subDirectoryPath,
+							destination: ledgerDestination,
+							fullExport: fullExport,
+							categories: categories,
+							includeAllBurstAssets: includeAllBurstAssets,
+							isInBackground: isInBackground
+						)
+					}
+				}
+				catch {
+					runResult = "error: \(error.localizedDescription)"
+					throw error
+				}
+				runResult = complete ? "done" : "cancelled"
+				// Remember the library state when the pass ran to the end (not cancelled, no error). Files that could not be saved (for
+				// example photos that are only in iCloud) are tried again at the next full pass (a change in an album, the manual
+				// button) or when the photo changes again.
+				let remember = PhotoChangePlanner.mayRememberLibraryState(
+					plan: runReport.plan, hadChanges: true, outcome: complete ? .completed : .cancelled)
+				if remember {
 					DispatchQueue.main.async {
 						self.lastSuccessfulChangeToken = changeToken
 					}
@@ -477,14 +580,41 @@ enum PhotoBackupProgress {
 		self.lastSuccessfulChangeToken = nil
 	}
 
-	// Album mode: is there ANY change in the photo library since this token (a new photo, a photo put in an album, a new album, ...)?
-	// A set with one entry means yes, an empty set means no.
-	private nonisolated func anyLibraryChange(since: PHPersistentChangeToken) throws -> Set<String> {
+	// Album mode: what changed in the photo library since this saved state, as plain sets for PhotoChangePlanner (PhotoChangePlan.swift):
+	// the photos and videos added, changed and deleted, and the albums that changed (created, renamed, a photo put in or taken out,
+	// deleted). Albums that the back-up never looks at (smart albums such as Recents, iCloud Shared Albums, ...) are not counted as
+	// album changes. Throws what Photos throws (for example an expired saved state); the caller then looks at everything.
+	private nonisolated func classifyLibraryChanges(since: PHPersistentChangeToken) throws -> PhotoChangeInput {
+		var result = PhotoChangeInput()
+		var albumIdentifiers = Set<String>()
 		let changes = try PHPhotoLibrary.shared().fetchPersistentChanges(since: since)
-		for _ in changes {
-			return ["*"]
+		for change in changes {
+			result.changeRecords += 1
+
+			let assetDetails = try change.changeDetails(for: .asset)
+			for i in assetDetails.insertedLocalIdentifiers {
+				result.inserted.insert(i)
+			}
+			for i in assetDetails.updatedLocalIdentifiers {
+				result.updated.insert(i)
+			}
+			for i in assetDetails.deletedLocalIdentifiers {
+				result.deleted.insert(i)
+			}
+
+			let albumDetails = try change.changeDetails(for: .assetCollection)
+			for i in albumDetails.insertedLocalIdentifiers {
+				albumIdentifiers.insert(i)
+			}
+			for i in albumDetails.updatedLocalIdentifiers {
+				albumIdentifiers.insert(i)
+			}
+			for i in albumDetails.deletedLocalIdentifiers {
+				albumIdentifiers.insert(i)
+			}
 		}
-		return []
+		result.changedAlbums = changedAlbumsThatMatter(among: albumIdentifiers)
+		return result
 	}
 
 	// Album mode ("Every album (one folder per album)"): one pass over all user albums. Each album is saved in a folder with its name;
@@ -616,6 +746,155 @@ enum PhotoBackupProgress {
 		if notSaved > 0 {
 			Log.warn(
 				"Album back-up: \(notSaved) files could not be saved this time (for example photos that are only in iCloud). They are tried again at the next change in the photo library or when you press 'Back-up new photos'."
+			)
+		}
+		let savedCount = ledger.completedCount
+		let completedDate = Date.now.timeIntervalSinceReferenceDate
+		DispatchQueue.main.async {
+			self.lastCompletedDate = completedDate
+			self.progress = .finished(savedAssets: savedCount, purgedAssets: nil)
+		}
+		return true
+	}
+
+	// Album mode, the FAST PATH of the automatic run (decided by PhotoChangePlanner, see PhotoChangePlan.swift): only the photos and videos
+	// that the library reported as added or changed are looked at, and no album changed. For each of them the user albums it is in are
+	// found (none = the folder "No album"); then the same per-album code as the full pass (backupAlbum, with the ledger) saves what is
+	// missing, narrowed down to those photos. The ledger knows what is saved already, so a changed old photo costs nothing.
+	// Returns true when the pass ran to the end (it was not cancelled): then the caller remembers the library change token. A pass that
+	// fails with an error throws instead; then the token is not remembered and the next run reads the same changes again.
+	private nonisolated func backupChangedAssets(
+		appState: AppState,
+		folder: SushitrainFolder,
+		folderURL: URL,
+		subDirectoryPath: EntryPath,
+		destination: String,
+		assetIDs: Set<String>,
+		categories: Set<PhotoBackupCategory>,
+		includeAllBurstAssets: Bool,
+		isInBackground: Bool
+	) async throws -> Bool {
+		let ledgerURL = try albumLedgerFileURL(destination: destination)
+		let ledger = AlbumExportLedger.load(destination: destination, fileURL: ledgerURL)
+		Log.info("Album back-up (fast path): ledger \(ledgerURL.lastPathComponent): \(ledger.loadNote)")
+		if !ledger.isUsable {
+			// See backupEveryAlbum: never go on with an empty ledger when the real one cannot be read right now
+			let message = String(localized: "The list of saved photos cannot be read right now. This is tried again later.")
+			DispatchQueue.main.async { self.progress = .error(message) }
+			throw CocoaError(.fileReadNoPermission)
+		}
+		defer { ledger.saveNow() }
+
+		// All user albums and the folder name each one is saved in: the same call as the full pass makes (names given before are kept)
+		let albums = userAlbumCollections()
+		let albumRefs = albums.map { AlbumFolderRef(id: $0.localIdentifier, title: $0.localizedTitle ?? "") }
+		let folderNames = ledger.assignAlbums(albumRefs)
+		ledger.saveNow()
+
+		// The reported photos that still exist, and the user albums each one is in (none = "No album")
+		let fetchOptions = PHFetchOptions()
+		fetchOptions.includeAllBurstAssets = includeAllBurstAssets
+		let changed = PHAsset.fetchAssets(withLocalIdentifiers: Array(assetIDs), options: fetchOptions)
+		Log.info("Album back-up (fast path): \(assetIDs.count) photos reported, \(changed.count) found, \(albums.count) albums")
+
+		var idsPerAlbum: [String: Set<String>] = [:]
+		var albumByID: [String: PHAssetCollection] = [:]
+		var inNoAlbum = Set<String>()
+		changed.enumerateObjects { asset, _, _ in
+			var inSomeAlbum = false
+			let containing = PHAssetCollection.fetchAssetCollections(containing: asset, with: .album, options: nil)
+			containing.enumerateObjects { collection, _, _ in
+				if isBackedUpAlbum(collection) {
+					idsPerAlbum[collection.localIdentifier, default: []].insert(asset.localIdentifier)
+					albumByID[collection.localIdentifier] = collection
+					inSomeAlbum = true
+				}
+			}
+			if !inSomeAlbum {
+				inNoAlbum.insert(asset.localIdentifier)
+			}
+		}
+
+		// One album after the other. An album that fails does not stop the others; the first error is reported at the end.
+		var firstError: Error? = nil
+		for albumID in idsPerAlbum.keys.sorted() {
+			if Task.isCancelled { break }
+			guard let album = albumByID[albumID], let folderName = folderNames[albumID], let ids = idsPerAlbum[albumID] else {
+				Log.warn("Album back-up (fast path): the album \(albumID) is not known (yet); the next full pass will look at it")
+				continue
+			}
+			let context = AlbumExportContext(ledger: ledger, folderName: folderName, albumID: albumID, skipAssetIDs: [])
+			do {
+				try await self.backupAlbum(
+					appState: appState,
+					album: album,
+					folder: folder,
+					folderURL: folderURL,
+					subDirectoryPath: subDirectoryPath,
+					fullExport: false,
+					categories: categories,
+					includeAllBurstAssets: includeAllBurstAssets,
+					isInBackground: isInBackground,
+					onlyTheseLocalIdentifiers: ids,
+					albumContext: context
+				)
+			}
+			catch {
+				if Task.isCancelled { throw error }
+				Log.warn("Album back-up (fast path): the album '\(folderName)' could not be saved completely: \(error.localizedDescription)")
+				if firstError == nil { firstError = error }
+			}
+		}
+
+		// Photos and videos that are in no user album
+		if !Task.isCancelled && !inNoAlbum.isEmpty {
+			let libraries = PHAssetCollection.fetchAssetCollections(
+				with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil)
+			if let library = libraries.firstObject {
+				let context = AlbumExportContext(
+					ledger: ledger, folderName: AlbumFolderNaming.noAlbumFolderName,
+					albumID: AlbumFolderNaming.noAlbumIdentifier, skipAssetIDs: [])
+				do {
+					try await self.backupAlbum(
+						appState: appState,
+						album: library,
+						folder: folder,
+						folderURL: folderURL,
+						subDirectoryPath: subDirectoryPath,
+						fullExport: false,
+						categories: categories,
+						includeAllBurstAssets: includeAllBurstAssets,
+						isInBackground: isInBackground,
+						onlyTheseLocalIdentifiers: inNoAlbum,
+						albumContext: context
+					)
+				}
+				catch {
+					if Task.isCancelled { throw error }
+					Log.warn("Album back-up (fast path): the photos in no album could not be saved completely: \(error.localizedDescription)")
+					if firstError == nil { firstError = error }
+				}
+			}
+		}
+
+		ledger.saveNow()
+		if let saveError = ledger.lastSaveError {
+			Log.warn("Album back-up (fast path): the ledger could not be written: \(saveError)")
+		}
+		Log.info(
+			"Album back-up (fast path): saved \(ledger.completedCount) files, \(ledger.adoptedCount) were there already, \(ledger.openCount) not saved, \(ledger.savedItemCount) in the ledger"
+		)
+		if let error = firstError {
+			let message = error.localizedDescription
+			DispatchQueue.main.async { self.progress = .error(message) }
+			throw error
+		}
+		if Task.isCancelled { return false }
+
+		let notSaved = ledger.openCount
+		if notSaved > 0 {
+			Log.warn(
+				"Album back-up (fast path): \(notSaved) files could not be saved this time (for example photos that are only in iCloud). They are tried again at the next full pass (an album changed, or 'Back-up new photos') or when the photo changes again."
 			)
 		}
 		let savedCount = ledger.completedCount
@@ -1449,14 +1728,48 @@ private func userAlbumCollections() -> [PHAssetCollection] {
 	var result: [PHAssetCollection] = []
 	let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
 	collections.enumerateObjects { collection, _, _ in
-		switch collection.assetCollectionSubtype {
-		case .albumRegular, .albumImported, .albumSyncedEvent, .albumSyncedFaces, .albumSyncedAlbum:
+		if isBackedUpAlbum(collection) {
 			result.append(collection)
-		default:
-			break
 		}
 	}
 	return result
+}
+
+/// Album mode: is this collection one of the albums that get a folder of their own? The same rule is used to list the albums and to
+/// find the albums a changed photo is in (the fast path): an album the user made, or one that came from a computer or an import. Not a
+/// smart album, not an iCloud Shared Album and not My Photo Stream.
+private func isBackedUpAlbum(_ collection: PHAssetCollection) -> Bool {
+	if collection.assetCollectionType != .album {
+		return false
+	}
+	switch collection.assetCollectionSubtype {
+	case .albumRegular, .albumImported, .albumSyncedEvent, .albumSyncedFaces, .albumSyncedAlbum:
+		return true
+	default:
+		return false
+	}
+}
+
+/// Album mode (fast path): of the collections the library reported as changed, the ones that matter to the back-up: the albums that get
+/// a folder (see isBackedUpAlbum) and identifiers that cannot be found any more (a deleted album, or one that came and went again).
+/// A collection that exists and is not such an album (Recents and the other smart albums, an iCloud Shared Album, ...) does not matter.
+private func changedAlbumsThatMatter(among identifiers: Set<String>) -> Set<String> {
+	if identifiers.isEmpty {
+		return []
+	}
+	var found = Set<String>()
+	var matter = Set<String>()
+	let collections = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: Array(identifiers), options: nil)
+	collections.enumerateObjects { collection, _, _ in
+		found.insert(collection.localIdentifier)
+		if isBackedUpAlbum(collection) {
+			matter.insert(collection.localIdentifier)
+		}
+	}
+	for identifier in identifiers where !found.contains(identifier) {
+		matter.insert(identifier)
+	}
+	return matter
 }
 
 /// Album mode: where the ledger of one destination lives: the app's Application Support folder

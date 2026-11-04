@@ -187,11 +187,12 @@
 	/// Event-driven: it listens to PHPhotoLibraryChangeObserver and runs once after a quiet period (a single
 	/// one-shot wait that is cancelled and restarted by every new change; there is no repeating timer and no
 	/// polling). The existing PhotoBackup.backup() already compares Photos' persistent change token, so a call
-	/// with nothing new returns at once. isInBackground is always true, which keeps PhotoBackup from ever
+	/// with nothing new returns at once; in album mode it also finds out WHAT changed and looks at a new photo only
+	/// (the "fast path", see PhotoChangePlan.swift). isInBackground is always true, which keeps PhotoBackup from ever
 	/// deleting originals ("Remove saved photos from source" only runs from the foreground button).
+	///
+	/// The wait is the setting photoBackupQuietSeconds (PhotoBackup.quietSeconds: default 8 s, 3...120 s).
 	@MainActor final class AutoPhotoBackup: NSObject, PHPhotoLibraryChangeObserver {
-		private static let quietPeriod: Duration = .seconds(20)
-
 		private unowned let appState: AppState
 		private var registered = false
 		private var pending: Task<Void, Never>? = nil
@@ -216,12 +217,14 @@
 			Task { @MainActor in self.schedule(reason: "photo library changed") }
 		}
 
-		/// Ask for a back-up run after a quiet period. Repeated calls restart the wait.
+		/// Ask for a back-up run after a quiet period. Repeated calls restart the wait, so a burst of photos, or a Live Photo
+		/// that Photos is still finishing, is saved only after things have been quiet for the whole wait.
 		func schedule(reason: String) {
 			guard appState.photoBackup.automatic else { return }
+			let quietPeriod = Duration.seconds(appState.photoBackup.quietSeconds)
 			pending?.cancel()
 			pending = Task { [weak self] in
-				try? await Task.sleep(for: Self.quietPeriod)
+				try? await Task.sleep(for: quietPeriod)
 				if Task.isCancelled { return }
 				self?.run(reason: reason)
 			}
