@@ -92,7 +92,8 @@ and, if you like, a path inside it. Then:
 
 What counts as an album: the albums you made (also the ones that came from a computer or a camera import). **Not** albums
 that iOS makes by itself (Favorites, Screenshots, Videos, Recents, People, Hidden, ...) and not iCloud Shared Albums: a photo
-that is only in those goes to `No album`.
+that is only in those goes to `No album`. Albums that sit inside a folder of the Photos app are expected to be treated like any other
+album (the folder hierarchy is not copied; same names get ` (2)`); this was not tested.
 
 - **Windows-safe names.** `\ / : * ? " < > |` and control characters become `_`; names are made Unicode NFC; no space at the start,
   no space or dot at the end; `CON PRN AUX NUL COM0-9 LPT0-9` (also with an extension) get a `_` (`CON` becomes `CON_`,
@@ -147,7 +148,19 @@ Known limits:
    the run with a message instead of starting an empty ledger; the next run tries again. A file that is really damaged is moved
    aside as `.damaged` and a new ledger is started (files already in the folder are then recognised, not saved again).
 
-Undo: `git revert <the album-folders commit>` (see the commit list) and push with `push_fork.ps1`; the ledger files become unused.
+First run, step by step:
+
+1. *Settings, Photo back-up*: *From album* = **Every album (one folder per album)**, *To folder* = the back-up folder (a
+   send-and-receive or send-only folder; the picker only offers suitable ones).
+2. Switch **off** "Do not save photos older than six months" if you also want the older photos (it is on by default).
+3. Press *Back-up new photos* on the Start screen (or wait: the app also starts by itself when a photo arrives) and keep the app
+   open and the phone charging. The progress bar shows the album that is being saved.
+4. *Settings, Support, View log messages* has lines that start with `Album back-up:`: how many albums were found, how many files were
+   saved, how many were there already, how many could not be saved this time.
+5. The folders appear on the PC when Syncthing has synced them. Pressing the button again later only saves what is new.
+
+Undo: revert all album-folder commits, `git revert --no-edit 169be91..HEAD` (169be91 is the commit just before them), and push with
+`push_fork.ps1`; the ledger files become unused.
 
 ## Self-test in the build
 
