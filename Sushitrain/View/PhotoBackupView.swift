@@ -191,6 +191,12 @@ struct PhotoBackupSettingsView: View {
 							isOn: photoBackup.$enableBackgroundCopy
 						).disabled(photoBackup.isBackingUp || photoBackup.selectedAlbumID.isEmpty)
 					}
+
+					Toggle("Back up new photos as soon as they arrive", isOn: photoBackup.$automatic)
+						.onChange(of: photoBackup.automatic) { _, nv in
+							Log.info("Auto photo backup setting changed: \(nv)")
+							if nv { appState.autoPhotoBackup.schedule(reason: "switched on") }
+						}
 				}
 			#endif
 

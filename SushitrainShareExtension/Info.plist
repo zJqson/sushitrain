@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Synctrain</string>
+	<string>PhotoTrain</string>
 	<key>SynctrainAppGroup</key>
 	<string>$(SYNCTRAIN_APP_GROUP)</string>
 	<key>NSExtension</key>

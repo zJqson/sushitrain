@@ -550,6 +550,8 @@ struct AdvancedSettingsView: View {
 
 		var body: some View {
 			Form {
+				BackgroundKeepAliveSection(keepAlive: appState.keepAlive, userSettings: userSettings)
+
 				Section {
 					BackgroundSchedulingControls(backgroundManager: backgroundManager) {
 						Toggle("While charging (long)", isOn: userSettings.$longBackgroundSyncEnabled)

@@ -178,6 +178,9 @@ enum PhotoBackupProgress {
 
 	@AppStorage("photoSyncLastCompletedDate") var lastCompletedDate: Double = -1.0
 	@AppStorage("photoSyncEnableBackgroundCopy") var enableBackgroundCopy: Bool = false
+
+	// Fork: start a back-up by itself when new photos arrive in the photo library (see AutoPhotoBackup)
+	@AppStorage("photoBackupAutomatic") var automatic: Bool = true
 	@AppStorage("photoSyncCategories") var categories: Set<PhotoBackupCategory> = Set([.photo, .video, .livePhoto])
 	@AppStorage("photoSyncPurgeEnabled") var purgeEnabled = false
 	@AppStorage("photoSyncPurgeAfterDays") var purgeAfterDays = 7

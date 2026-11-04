@@ -10,7 +10,7 @@ import OSLog
 /// macOS sharing hands files to the main app, which owns the destination picker and sync engine.
 final class ShareViewController: NSViewController {
 	private var started = false
-	private static let logger = Logger(subsystem: "nl.t-shaped.Sushitrain.Share", category: "Share")
+	private static let logger = Logger(subsystem: "com.jason.phototrain.Share", category: "Share")
 
 	override func loadView() {
 		let label = NSTextField(labelWithString: String(localized: "Opening Synctrain…"))

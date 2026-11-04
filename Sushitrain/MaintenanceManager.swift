@@ -12,7 +12,7 @@ import SwiftUI
 	static var maintenanceWarningInterval = Duration.seconds(maintenanceInterval / Duration.seconds(1.0) * 1.5)
 
 	#if os(macOS)
-		static var maintenanceActivityIdentifier = "nl.t-shaped.Sushitrain.database-maintenance"
+		static var maintenanceActivityIdentifier = "com.jason.phototrain.database-maintenance"
 	#endif
 
 	private unowned var appState: AppState

@@ -25,11 +25,11 @@ struct BackgroundSyncRun: Codable, Equatable {
 }
 
 enum BackgroundTaskType: String, Codable, Equatable {
-	case short = "nl.t-shaped.Sushitrain.short-background-sync"
-	case long = "nl.t-shaped.Sushitrain.background-sync"
+	case short = "com.jason.phototrain.short-background-sync"
+	case long = "com.jason.phototrain.background-sync"
 
 	// For some reason, this one must have the exact App bundle ID as prefix (case-sensitive)
-	case continued = "nl.t-shaped.Sushitrain.continued-background-sync"
+	case continued = "com.jason.phototrain.continued-background-sync"
 
 	var identifier: String {
 		return self.rawValue
@@ -66,7 +66,7 @@ enum ContinuedTaskType {
 			}
 		}
 
-		nonisolated private static let watchdogNotificationID = "nl.t-shaped.sushitrain.watchdog-notification"
+		nonisolated private static let watchdogNotificationID = "com.jason.phototrain.watchdog-notification"
 
 		// Time before the end of allotted background time to start ending the task to prevent forceful expiration by the OS
 		private static let backgroundTimeReserve: TimeInterval = 5.6
@@ -348,7 +348,8 @@ enum ContinuedTaskType {
 		}
 
 		func inactivate() {
-			if self.currentBackgroundTask == nil {
+			// Fork: with the keep-alive running the app is not frozen when it leaves the screen, so no need to cancel
+			if self.currentBackgroundTask == nil && !self.appState.keepAlive.isRunning {
 				Log.info(
 					"Canceling photo back-up because we are moving to the inactive state, and we were not started from a background task."
 				)
@@ -524,10 +525,16 @@ enum ContinuedTaskType {
 				run.ended = Date.now
 
 				Log.info("Background sync stopped at \(run.ended!.debugDescription)")
-				self.appState.photoBackup.cancel()
+				if self.appState.keepAlive.isRunning {
+					// Fork: the location session keeps the app alive, so leave the photo back-up and the peers running
+					Log.info("Keep-alive is running: not cancelling photo back-up and not suspending peers")
+				}
+				else {
+					self.appState.photoBackup.cancel()
 
-				Log.info("Suspending peers")
-				await self.appState.suspend(true)
+					Log.info("Suspending peers")
+					await self.appState.suspend(true)
+				}
 
 				Log.info("Setting task completed")
 				task.setTaskCompleted(success: true)

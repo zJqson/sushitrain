@@ -138,14 +138,18 @@ class SushitrainDelegate: NSObject {
 	// First run time
 	@AppStorage("firstRunAt") var firstRunAt: Double = 0.0
 
-	// Whether to disable connections when on cellular
-	@AppStorage("disableDevicesOnCellular") var disableDevicesOnCellular = false
+	// Whether to disable connections when on cellular (fork default: on = never sync over mobile data)
+	@AppStorage("disableDevicesOnCellular") var disableDevicesOnCellular = true
 
-	// Whether to disable connections when on metered Wi-Fi
-	@AppStorage("disableDevicesOnMetered") var disableDevicesOnMetered = false
+	// Whether to disable connections when on metered Wi-Fi, which includes a Personal Hotspot and, in this fork,
+	// a Wi-Fi network that has Low Data Mode switched on (fork default: on)
+	@AppStorage("disableDevicesOnMetered") var disableDevicesOnMetered = true
 
 	// Whether to disable connections when on low power mode
 	@AppStorage("disableDevicesInLowPowerMode") var disableDevicesInLowPowerMode = false
+
+	// Fork: keep the app running in the background with an iOS location session (see BackgroundKeepAlive)
+	@AppStorage("keepRunningInBackground") var keepRunningInBackground: Bool = true
 }
 
 @MainActor class AppPersistentStatistics: ObservableObject {
@@ -231,9 +235,11 @@ struct SyncState: Equatable {
 
 	#if os(iOS)
 		// Notification-service IPC can block even for APIs with completion handlers.
-		nonisolated private static let badgeUpdateQueue = DispatchQueue(label: "nl.t-shaped.sushitrain.badge", qos: .utility)
+		nonisolated private static let badgeUpdateQueue = DispatchQueue(label: "com.jason.phototrain.badge", qos: .utility)
 		@ObservationIgnored var backgroundManager: BackgroundManager!
 		@ObservationIgnored private var lingerManager: LingerManager!
+		@ObservationIgnored var keepAlive: BackgroundKeepAlive!
+		@ObservationIgnored var autoPhotoBackup: AutoPhotoBackup!
 	#endif
 
 	private(set) var isSuspended = false
@@ -254,6 +260,8 @@ struct SyncState: Equatable {
 		#if os(iOS)
 			self.backgroundManager = BackgroundManager(appState: self)
 			self.lingerManager = LingerManager(appState: self)
+			self.keepAlive = BackgroundKeepAlive(appState: self)
+			self.autoPhotoBackup = AutoPhotoBackup(appState: self)
 		#endif
 
 		self.maintenanceManager = MaintenanceManager(appState: self)
@@ -279,6 +287,12 @@ struct SyncState: Equatable {
 			name: Notification.Name.NSProcessInfoPowerStateDidChange,
 			object: nil
 		)
+
+		#if os(iOS)
+			// Fork: also needed on a launch in the background (iOS relaunches us after a location event), so do it here
+			self.keepAlive.apply()
+			self.autoPhotoBackup.refreshRegistration()
+		#endif
 	}
 
 	@objc nonisolated public func powerStateChanged(_ notification: Notification) {
@@ -479,6 +493,12 @@ struct SyncState: Equatable {
 			self.startupState = .started
 			Log.info("Ready to go")
 
+			#if os(iOS)
+				// Fork: catch up with photos taken while the app was not running
+				self.autoPhotoBackup.refreshRegistration()
+				self.autoPhotoBackup.schedule(reason: "app start")
+			#endif
+
 			#if os(macOS)
 				self.maintenanceManager.scheduleDatabaseMaintenance()
 			#endif
@@ -527,6 +547,9 @@ struct SyncState: Equatable {
 		pm.pathUpdateHandler = { [weak client] path in
 			Task { @MainActor in
 				Log.info("Network path change: \(path)")
+				Log.info(
+					"Network path flags: expensive=\(path.isExpensive) constrained=\(path.isConstrained) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular))"
+				)
 				self.currentNetworkPath = path
 				await self.updateDeviceSuspension()
 			}
@@ -862,7 +885,7 @@ struct SyncState: Equatable {
 		if userSettings.disableDevicesOnCellular || userSettings.disableDevicesOnMetered {
 			if let path = self.currentNetworkPath {
 				return (deviceHasCellularCapability() && userSettings.disableDevicesOnCellular && path.usesInterfaceType(.cellular))
-					|| (userSettings.disableDevicesOnMetered && path.isExpensive)
+					|| (userSettings.disableDevicesOnMetered && (path.isExpensive || path.isConstrained))
 			}
 			else {
 				// Disable, just to be sure
@@ -946,6 +969,17 @@ struct SyncState: Equatable {
 	}
 
 	func sleep() async {
+		#if os(iOS)
+			// Fork: while the location session keeps the process alive we stay connected in the background. Syncthing
+			// keeps running; the network rules (cellular / metered) still apply through the network monitor, which we leave on.
+			if self.keepAlive.isRunning {
+				Log.info("Keep-alive is running: staying connected instead of suspending")
+				try? self.client.setReconnectIntervalS(60)
+				self.client.ignoreEvents = true
+				return
+			}
+		#endif
+
 		self.stopNetworkMonitor()
 
 		#if os(iOS)
@@ -1028,6 +1062,11 @@ struct SyncState: Equatable {
 			Task {
 				await self.awake()
 			}
+			#if os(iOS)
+				// Fork: someone is looking at the app, so this is the moment a location prompt may be shown
+				self.keepAlive.apply()
+				self.autoPhotoBackup.refreshRegistration()
+			#endif
 			break
 
 		@unknown default:

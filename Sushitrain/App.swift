@@ -11,7 +11,7 @@ import AppIntents
 
 @main
 struct SushitrainApp: App {
-	static var viewRouteActivityID = "nl.t-shaped.Sushitrain.view-route"
+	static var viewRouteActivityID = "com.jason.phototrain.view-route"
 
 	@State fileprivate var appState: AppState
 

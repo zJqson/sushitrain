@@ -31,7 +31,6 @@
 		6575B3DF2C6012480057686E /* ChangesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6575B3DE2C6012480057686E /* ChangesView.swift */; };
 		657603EF2D0457B400B36D78 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 657603EE2D0457B300B36D78 /* Intents.swift */; };
 		657603F12D045D0B00B36D78 /* QuickActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 657603F02D045D0900B36D78 /* QuickActions.swift */; };
-		658155A52E76D1B60040332B /* SushitrainGlass.icon in Resources */ = {isa = PBXBuildFile; fileRef = 658155A42E76D1B60040332B /* SushitrainGlass.icon */; };
 		6582C5412E893454006F92F1 /* StatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6582C5402E893450006F92F1 /* StatisticsView.swift */; };
 		6586863D2CE892130023B1DA /* IgnoresView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6586863C2CE892100023B1DA /* IgnoresView.swift */; };
 		658A29F02CA821950061D1D5 /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 658A29EF2CA821950061D1D5 /* AVKit.framework */; };
@@ -72,6 +71,7 @@
 		65EAD89930712B520042B3CD /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EAD89730712B520042B3CD /* ShareViewController.swift */; };
 		65EAD89C30712B5D0042B3CD /* FileImportCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EAD89A30712B5D0042B3CD /* FileImportCopy.swift */; };
 		65EAD89D30712B5D0042B3CD /* FileImportCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65EAD89A30712B5D0042B3CD /* FileImportCopy.swift */; };
+		66A1F00000000000000000A2 /* BackgroundKeepAlive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66A1F00000000000000000A1 /* BackgroundKeepAlive.swift */; };
 		65F15BFC2CA03CBE00E13DDD /* BackgroundManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F15BFB2CA03CBA00E13DDD /* BackgroundManager.swift */; };
 		65F15BFD2CA03DCE00E13DDD /* SushitrainCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 65AE125A2C3AB03E00E721D4 /* SushitrainCore.xcframework */; };
 		65F15C012CA06B2300E13DDD /* UploadsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F15C002CA06B2100E13DDD /* UploadsView.swift */; };
@@ -138,7 +138,6 @@
 		6575B3DE2C6012480057686E /* ChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesView.swift; sourceTree = "<group>"; };
 		657603EE2D0457B300B36D78 /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
 		657603F02D045D0900B36D78 /* QuickActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickActions.swift; sourceTree = "<group>"; };
-		658155A42E76D1B60040332B /* SushitrainGlass.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = SushitrainGlass.icon; sourceTree = "<group>"; };
 		6582C5402E893450006F92F1 /* StatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatisticsView.swift; sourceTree = "<group>"; };
 		6586863C2CE892100023B1DA /* IgnoresView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IgnoresView.swift; sourceTree = "<group>"; };
 		658A29EF2CA821950061D1D5 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
@@ -184,6 +183,7 @@
 		65EAD89630712B520042B3CD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		65EAD89730712B520042B3CD /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		65EAD89A30712B5D0042B3CD /* FileImportCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileImportCopy.swift; sourceTree = "<group>"; };
+		66A1F00000000000000000A1 /* BackgroundKeepAlive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundKeepAlive.swift; sourceTree = "<group>"; };
 		65F15BFB2CA03CBA00E13DDD /* BackgroundManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundManager.swift; sourceTree = "<group>"; };
 		65F15C002CA06B2100E13DDD /* UploadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadsView.swift; sourceTree = "<group>"; };
 		65F15C022CA1F85D00E13DDD /* SafariView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariView.swift; sourceTree = "<group>"; };
@@ -214,7 +214,6 @@
 				65EAD89B30712B5D0042B3CD /* SushitrainShared */,
 				65EAD89830712B520042B3CD /* SushitrainShareExtension */,
 				65AE11FB2C39EE0E00E721D4 /* Sushitrain */,
-				658155A42E76D1B60040332B /* SushitrainGlass.icon */,
 				65AE12132C39F0CD00E721D4 /* Frameworks */,
 				65AE11FA2C39EE0E00E721D4 /* Products */,
 			);
@@ -236,6 +235,7 @@
 				65AE11FC2C39EE0E00E721D4 /* App.swift */,
 				65AE12722C3B163000E721D4 /* AppState.swift */,
 				65AE12002C39EE0F00E721D4 /* Assets.xcassets */,
+				66A1F00000000000000000A1 /* BackgroundKeepAlive.swift */,
 				65F15BFB2CA03CBA00E13DDD /* BackgroundManager.swift */,
 				65AF4C082D4FA46400A77899 /* ExternalSharing.swift */,
 				F10000000000000000000002 /* FileImport.swift */,
@@ -455,7 +455,6 @@
 				6506158B2C3C4EA9002B6EE6 /* Localizable.xcstrings in Resources */,
 				653359C92D8EAF3A005CCA43 /* Settings.bundle in Resources */,
 				65AE12012C39EE0F00E721D4 /* Assets.xcassets in Resources */,
-				658155A52E76D1B60040332B /* SushitrainGlass.icon in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -468,6 +467,7 @@
 			files = (
 				65361E6A2D18360F00BCC52C /* FileViewerView.swift in Sources */,
 				652763BB2C45C99200250D3C /* SettingsView.swift in Sources */,
+				66A1F00000000000000000A2 /* BackgroundKeepAlive.swift in Sources */,
 				65F15BFC2CA03CBE00E13DDD /* BackgroundManager.swift in Sources */,
 				6505643D2CA98930009FFFB9 /* GridFilesView.swift in Sources */,
 				65B478672E8009E000438671 /* Sharing.swift in Sources */,
@@ -686,7 +686,7 @@
 		65AE12082C39EE0F00E721D4 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = SushitrainGlass;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_ENTITLEMENTS = Sushitrain/Sushitrain.entitlements;
@@ -708,7 +708,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Sushitrain/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Synctrain;
+				INFOPLIST_KEY_CFBundleDisplayName = "PhotoTrain";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = YES;
 				INFOPLIST_KEY_ITSEncryptionExportComplianceCode = "c725a5cb-2954-4d01-9fe0-cb53e270346e";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -727,7 +727,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 2.8;
-				PRODUCT_BUNDLE_IDENTIFIER = "nl.t-shaped.Sushitrain";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jason.phototrain";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
@@ -742,8 +742,8 @@
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
-				SYNCTRAIN_APP_GROUP = "group.nl.t-shaped.sushitrain.sync";
-				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).nl.t-shaped.sushitrain.sync";
+				SYNCTRAIN_APP_GROUP = "group.com.jason.phototrain.sync";
+				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).com.jason.phototrain.sync";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -751,7 +751,7 @@
 		65AE12092C39EE0F00E721D4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = SushitrainGlass;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = NO;
 				CODE_SIGN_ENTITLEMENTS = Sushitrain/Sushitrain.entitlements;
@@ -773,7 +773,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Sushitrain/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Synctrain;
+				INFOPLIST_KEY_CFBundleDisplayName = "PhotoTrain";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = YES;
 				INFOPLIST_KEY_ITSEncryptionExportComplianceCode = "c725a5cb-2954-4d01-9fe0-cb53e270346e";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
@@ -792,7 +792,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 2.8;
-				PRODUCT_BUNDLE_IDENTIFIER = "nl.t-shaped.Sushitrain";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jason.phototrain";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
@@ -807,8 +807,8 @@
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
-				SYNCTRAIN_APP_GROUP = "group.nl.t-shaped.sushitrain.sync";
-				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).nl.t-shaped.sushitrain.sync";
+				SYNCTRAIN_APP_GROUP = "group.com.jason.phototrain.sync";
+				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).com.jason.phototrain.sync";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -865,7 +865,7 @@
 				INFOPLIST_FILE = SushitrainShareExtension/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 2.8;
-				PRODUCT_BUNDLE_IDENTIFIER = "nl.t-shaped.Sushitrain.Share";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jason.phototrain.Share";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -877,8 +877,8 @@
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_VERSION = 6.0;
-				SYNCTRAIN_APP_GROUP = "group.nl.t-shaped.sushitrain.sync";
-				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).nl.t-shaped.sushitrain.sync";
+				SYNCTRAIN_APP_GROUP = "group.com.jason.phototrain.sync";
+				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).com.jason.phototrain.sync";
 			};
 			name = Debug;
 		};
@@ -905,7 +905,7 @@
 				INFOPLIST_FILE = SushitrainShareExtension/Info.plist;
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = 2.8;
-				PRODUCT_BUNDLE_IDENTIFIER = "nl.t-shaped.Sushitrain.Share";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jason.phototrain.Share";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
 				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
@@ -917,8 +917,8 @@
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_VERSION = 6.0;
-				SYNCTRAIN_APP_GROUP = "group.nl.t-shaped.sushitrain.sync";
-				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).nl.t-shaped.sushitrain.sync";
+				SYNCTRAIN_APP_GROUP = "group.com.jason.phototrain.sync";
+				"SYNCTRAIN_APP_GROUP[sdk=macosx*]" = "$(DEVELOPMENT_TEAM).com.jason.phototrain.sync";
 			};
 			name = Release;
 		};

@@ -4,9 +4,9 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>nl.t-shaped.Sushitrain.continued-background-sync</string>
-		<string>nl.t-shaped.Sushitrain.background-sync</string>
-		<string>nl.t-shaped.Sushitrain.short-background-sync</string>
+		<string>com.jason.phototrain.continued-background-sync</string>
+		<string>com.jason.phototrain.background-sync</string>
+		<string>com.jason.phototrain.short-background-sync</string>
 	</array>
 	<key>CFBundleDocumentTypes</key>
 	<array>
@@ -41,6 +41,12 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Location is used only to keep this app running in the background, so new photos are backed up by themselves. Your position is never stored, logged or sent anywhere.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>Location is used only to keep this app running in the background, so new photos are backed up by themselves. Your position is never stored, logged or sent anywhere.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location is used only to keep this app running in the background, so new photos are backed up by themselves. Your position is never stored, logged or sent anywhere.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).view-route</string>
@@ -48,6 +54,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>location</string>
 		<string>processing</string>
 	</array>
 	<key>UIFileSharingEnabled</key>

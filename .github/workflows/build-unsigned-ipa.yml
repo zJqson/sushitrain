@@ -1,0 +1,273 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at https://mozilla.org/MPL/2.0/.
+# build-unsigned-ipa.yml - builds this fork (Jason's personal "PhotoTrain", a fork of pixelspark/sushitrain, MPL-2.0)
+# into an UNSIGNED iOS .ipa on GitHub's free macOS runner. No Mac, no Apple ID, no token, no secret is involved:
+# the .ipa is signed later, on the phone, by SideStore / AltStore / Sideloadly.
+#
+# What one run publishes (everything with the built-in GITHUB_TOKEN of the run, permissions: contents: write only):
+#   1. branch  build-logs :  run-<run_number>.log (full make / xcodebuild output) + LATEST.txt, the commit message holds
+#                            the outcome and the first 40 error lines. Newest 20 logs are kept. Written on success AND failure.
+#   2. release build-<run_number> (pre-release) with the unsigned PhotoTrain.ipa, only when the build succeeded.
+#   3. the same outcome + error lines in this run's job summary.
+# Read them without any login:  git fetch origin build-logs   /   curl on the release asset (see README_FORK.md).
+#
+# Based on upstream's own .github/workflows/build.yml (pixelspark/sushitrain, read at commit 1ed5e2c; that file is kept
+# in this fork as build.yml.disabled): same runner label (xcode-27), Xcode 27.0, Go ~1.27.0, same make targets.
+#
+# ACTION PINS: actions/checkout@v3 and actions/setup-go@v5 are exactly the tags upstream's build.yml uses and its runs of
+# 2026-10-31..11-01 passed with them on this runner image. They are MAJOR-VERSION TAGS, not full commit SHAs: a SHA can only be
+# looked up on the network and this file was written offline. To pin them later:  py -3 tools/pin_actions.py <this file>
+# (needs network). Nothing else is used: no upload-artifact, no cache, no marketplace action; `gh`, `git`, `python3`
+# and `plutil` come with the runner image.
+
+name: "Build unsigned iOS .ipa"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      strip_share_extension:
+        description: "Remove the Share extension from the .ipa (saves one App ID of the free Apple account; the app does not need it)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "~1.27.0"                      # upstream value; SushitrainCore/go.mod says go 1.27.0
+  XCODE_APP: /Applications/Xcode_27.0.app   # upstream value (the image also has 27.1 default and 27.2 RC)
+  APP_NAME: PhotoTrain                       # must match the committed rename (checked in the "identity" step)
+  BUNDLE_ID: com.jason.phototrain            # idem
+  LOG_KEEP: "20"                             # how many run-N.log files stay on the build-logs branch
+  # on a push event `inputs` is empty and (null == false) is TRUE in Actions, so test the event name first
+  STRIP_SHARE: ${{ (github.event_name == 'workflow_dispatch' && inputs.strip_share_extension == false) && 'no' || 'yes' }}
+
+jobs:
+  build:
+    name: Build unsigned .ipa
+    runs-on: xcode-27        # standard arm64 (M1) runner, GA 2026-10-15; free and unlimited in a PUBLIC repo
+    timeout-minutes: 30
+    permissions:
+      contents: write        # push the build-logs branch + create the release; nothing else is granted
+    defaults:
+      run:
+        shell: bash          # = bash -eo pipefail, so `cmd | tee -a log` still fails the step when cmd fails
+    steps:
+      - id: checkout
+        name: Check out
+        uses: actions/checkout@v3
+
+      - id: log_init
+        name: Start the build log
+        run: |
+          echo "BUILD_LOG=$RUNNER_TEMP/build.log" >> "$GITHUB_ENV"
+          { echo "build log of run $GITHUB_RUN_NUMBER (attempt $GITHUB_RUN_ATTEMPT), commit $GITHUB_SHA"; date -u +"started %Y-%m-%dT%H:%M:%SZ"; } > "$RUNNER_TEMP/build.log"
+
+      - id: xcode
+        name: Select Xcode and show versions
+        run: |
+          {
+            echo "=== select Xcode ($(date -u +%H:%M:%SZ)) ==="
+            if [ -d "$XCODE_APP" ]; then
+              sudo /usr/bin/xcode-select -switch "$XCODE_APP"
+            else
+              echo "WARNING: $XCODE_APP is not on this runner image; keeping the default Xcode. Installed:"
+              ls -d /Applications/Xcode*
+            fi
+            xcrun simctl list > /dev/null
+            /usr/bin/xcodebuild -version
+            python3 --version
+            git --version
+            gh --version
+            df -h /
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: platform
+        name: Install the iOS platform (upstream does this too)
+        # soft step: if the platform is already on the image or the download fails, the archive step is the real judge
+        continue-on-error: true
+        timeout-minutes: 4
+        run: |
+          {
+            echo "=== xcodebuild -downloadPlatform iOS ($(date -u +%H:%M:%SZ)) ==="
+            for i in 1 2 3; do
+              if xcodebuild -downloadPlatform iOS; then break; fi
+              echo "download attempt $i did not succeed"
+              sleep 15
+            done
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: go
+        name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+          check-latest: true
+
+      - id: identity
+        name: Check the app identity (the rename is already in the commit)
+        # The upstream names Sushitrain / Synctrain and the logo files are NOT MPL licensed (README "License"); the commit
+        # carries tools/rename_fork.py's result. This step fails fast (seconds) if a later edit brought the old identity back.
+        run: |
+          {
+            echo "=== identity check ==="
+            P=Sushitrain.xcodeproj/project.pbxproj
+            need() { if grep -q -F -- "$2" "$1"; then echo "ok: $2"; else echo "ERROR: $1 does not contain: $2"; exit 1; fi; }
+            need "$P" "PRODUCT_BUNDLE_IDENTIFIER = \"$BUNDLE_ID\";"
+            need "$P" "INFOPLIST_KEY_CFBundleDisplayName = \"$APP_NAME\";"
+            need Sushitrain/Info.plist "$BUNDLE_ID."
+            if grep -q -F -- "nl.t-shaped.Sushitrain" "$P"; then echo "ERROR: $P still has the original bundle id"; exit 1; fi
+            if [ -f Sushitrain/BackgroundKeepAlive.swift ]; then echo "ok: BackgroundKeepAlive.swift present"; else echo "ERROR: BackgroundKeepAlive.swift is missing"; exit 1; fi
+            if [ -e SushitrainGlass.icon ]; then echo "ERROR: the reserved icon folder SushitrainGlass.icon is back"; exit 1; else echo "ok: reserved icon folder is gone"; fi
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: entitlements
+        name: Remove entitlements that a free Apple ID cannot sign
+        # README step 1 (device-name entitlement) plus push (aps-environment): not used by the code, and a free account
+        # cannot have them. Dots in a key must be escaped for plutil (same as upstream's Makefile does).
+        run: |
+          {
+            echo "=== entitlements ==="
+            E=Sushitrain/Sushitrain.entitlements
+            plutil -remove "com\.apple\.developer\.device-information\.user-assigned-device-name" "$E" || echo "(device-name entitlement was not there)"
+            plutil -remove "com\.apple\.developer\.aps-environment" "$E" || echo "(com.apple.developer.aps-environment was not there)"
+            plutil -remove "aps-environment" "$E" || echo "(aps-environment was not there)"
+            plutil -p "$E"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: core
+        name: Build the Go core (make core)
+        timeout-minutes: 9
+        run: |
+          {
+            echo "=== make core ($(date -u +%H:%M:%SZ)) ==="
+            make core
+            echo "=== make core finished ($(date -u +%H:%M:%SZ)) ==="
+            ls -la SushitrainCore/build
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: ios
+        name: Build the iOS archive, unsigned (make ios)
+        # the Makefile target runs: xcodebuild -scheme "Synctrain release" -sdk iphoneos -configuration Release
+        #   -destination generic/platform=iOS CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO clean archive
+        timeout-minutes: 13
+        run: |
+          {
+            echo "=== make ios ($(date -u +%H:%M:%SZ)) ==="
+            make ios
+            echo "=== make ios finished ($(date -u +%H:%M:%SZ)) ==="
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: package
+        name: Package the .ipa
+        run: |
+          {
+            echo "=== package ($(date -u +%H:%M:%SZ)) ==="
+            APP="$(ls -d Build/synctrain-ios.xcarchive/Products/Applications/*.app | head -n 1)"
+            echo "app bundle: $APP"
+            rm -rf dist && mkdir -p dist/Payload
+            cp -R "$APP" dist/Payload/
+            if [ "$STRIP_SHARE" = "yes" ] && [ -d dist/Payload/*.app/PlugIns ]; then
+              echo "removing the Share extension:"; ls dist/Payload/*.app/PlugIns
+              rm -rf dist/Payload/*.app/PlugIns
+            fi
+            IPA="dist/${APP_NAME// /-}.ipa"
+            (cd dist && /usr/bin/zip -qry "$(basename "$IPA")" Payload)
+            ls -l dist
+            echo "ipa_info=$(basename "$IPA") $(wc -c < "$IPA" | tr -d ' ') bytes, sha256 $(shasum -a 256 "$IPA" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: check_ipa
+        name: Check the .ipa before publishing it
+        run: |
+          {
+            echo "=== check ipa ==="
+            PLIST="$(ls dist/Payload/*.app/Info.plist)"
+            plutil -p "$PLIST" | grep -E 'CFBundleIdentifier|CFBundleDisplayName|MinimumOSVersion|NSLocation' || true
+            MODES="$(plutil -extract UIBackgroundModes json -o - "$PLIST")"
+            echo "UIBackgroundModes: $MODES"
+            case "$MODES" in *'"location"'*) ;; *) echo "ERROR: location is missing from UIBackgroundModes"; exit 1;; esac
+            plutil -extract NSLocationAlwaysAndWhenInUseUsageDescription raw -o - "$PLIST" > /dev/null
+            ls dist/Payload/*.app
+            if [ -d dist/Payload/*.app/Frameworks ]; then ls dist/Payload/*.app/Frameworks; else echo "(no Frameworks folder: the Go core is linked statically)"; fi
+            codesign -dv dist/Payload/*.app 2>&1 || true   # expected: "code object is not signed at all"
+            GOT="$(plutil -extract CFBundleIdentifier raw -o - "$PLIST")"
+            echo "bundle id in the app: $GOT (must be $BUNDLE_ID)"
+            test "$GOT" = "$BUNDLE_ID"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: release
+        name: Publish the .ipa as a pre-release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}      # the run's own token; permissions: contents: write above
+          TAG: build-${{ github.run_number }}
+        run: |
+          {
+            echo "=== release $TAG ($(date -u +%H:%M:%SZ)) ==="
+            IPA="dist/${APP_NAME// /-}.ipa"
+            printf '%s\n' "UNSIGNED build of commit $GITHUB_SHA (run $GITHUB_RUN_NUMBER)." "" \
+              "Sign and install it on the phone with SideStore, AltStore or Sideloadly. It is not signed by anyone." \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/notes.md"
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              gh release upload "$TAG" "$IPA" --repo "$GITHUB_REPOSITORY" --clobber
+            else
+              gh release create "$TAG" "$IPA" --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+                --title "Build $GITHUB_RUN_NUMBER" --notes-file "$RUNNER_TEMP/notes.md"
+            fi
+            echo "url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$IPA")" >> "$GITHUB_OUTPUT"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
+      - id: prune_releases
+        name: Keep only the newest build releases
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OLD="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' | grep '^build-' | tail -n +$((LOG_KEEP + 1)) || true)"
+          for t in $OLD; do
+            echo "deleting old release $t"
+            gh release delete "$t" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done
+
+      - id: publish_log
+        name: Publish the build log (always)
+        if: always()
+        continue-on-error: true      # a log that cannot be pushed must not change the build's own result
+        env:
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+          IPA_INFO: ${{ steps.package.outputs.ipa_info }}
+          STEP_RESULTS: >-
+            checkout=${{ steps.checkout.conclusion }}
+            xcode=${{ steps.xcode.conclusion }}
+            platform=${{ steps.platform.conclusion }}
+            go=${{ steps.go.conclusion }}
+            identity=${{ steps.identity.conclusion }}
+            entitlements=${{ steps.entitlements.conclusion }}
+            core=${{ steps.core.conclusion }}
+            ios=${{ steps.ios.conclusion }}
+            package=${{ steps.package.conclusion }}
+            check_ipa=${{ steps.check_ipa.conclusion }}
+            release=${{ steps.release.conclusion }}
+        run: |
+          LOG="${BUILD_LOG:-$RUNNER_TEMP/build.log}"
+          if [ -f .github/scripts/buildlog.py ]; then
+            python3 .github/scripts/buildlog.py publish --log "$LOG" \
+              --run-number "$GITHUB_RUN_NUMBER" --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --status "$(echo "$JOB_STATUS" | tr 'A-Z' 'a-z')" --sha "$GITHUB_SHA" --run-url "$RUN_URL" \
+              --steps "$STEP_RESULTS" --release-url "$RELEASE_URL" --ipa-info "$IPA_INFO" --keep "$LOG_KEEP"
+          else
+            echo "buildlog.py is missing (the checkout failed?): nothing was published"
+            echo "Build log not published: the checkout step did not finish." >> "$GITHUB_STEP_SUMMARY"
+          fi
