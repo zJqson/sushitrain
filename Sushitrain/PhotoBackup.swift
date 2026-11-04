@@ -301,7 +301,9 @@ enum PhotoBackupProgress {
 			Log.info("Current change token: \(changeToken)")
 			if let lastSuccessfulChangeToken = await self.lastSuccessfulChangeToken {
 				Log.info("Last change token: \(lastSuccessfulChangeToken)")
-				if !fullExport {
+				// Album mode: when the user presses "Back-up new photos" himself, always look at all albums (also retries files that
+				// could not be saved before); the automatic runs stop here when nothing changed in the library
+				if !fullExport && !(everyAlbum && !isInBackground) {
 					do {
 						// Album mode: a photo can be put in an album later without being changed itself, so ANY change in the
 						// library means "look at all albums again" (the list of photos is not narrowed down to the changed ones)
@@ -371,7 +373,8 @@ enum PhotoBackupProgress {
 					includeAllBurstAssets: includeAllBurstAssets,
 					isInBackground: isInBackground
 				)
-				// Save the change token only when everything was saved: otherwise the next run must look again
+				// Remember the library state when the pass ran to the end (not cancelled). Files that could not be saved (for example
+				// photos that are only in iCloud) are tried again at the next change in the library or at the next manual run.
 				if complete {
 					DispatchQueue.main.async {
 						self.lastSuccessfulChangeToken = changeToken
@@ -471,7 +474,8 @@ enum PhotoBackupProgress {
 	// Album mode ("Every album (one folder per album)"): one pass over all user albums. Each album is saved in a folder with its name;
 	// a photo that is in two albums is saved in both folders; photos that are in no user album go to the folder "No album".
 	// The ledger (a small file, see AlbumFolderNaming.swift) knows what was saved before, so only what is missing is saved.
-	// Returns true when everything that had to be saved was saved (then the caller may remember the library change token).
+	// Returns true when the pass ran to the end (it was not cancelled): then the caller remembers the library change token. A pass
+	// that fails with an error throws instead; then the token is not remembered and the next run looks at all albums again.
 	private nonisolated func backupEveryAlbum(
 		appState: AppState,
 		folder: SushitrainFolder,
@@ -585,13 +589,19 @@ enum PhotoBackupProgress {
 		}
 		if Task.isCancelled { return false }
 
+		let notSaved = ledger.openCount
+		if notSaved > 0 {
+			Log.warn(
+				"Album back-up: \(notSaved) files could not be saved this time (for example photos that are only in iCloud). They are tried again at the next change in the photo library or when you press 'Back-up new photos'."
+			)
+		}
 		let savedCount = ledger.completedCount
 		let completedDate = Date.now.timeIntervalSinceReferenceDate
 		DispatchQueue.main.async {
 			self.lastCompletedDate = completedDate
 			self.progress = .finished(savedAssets: savedCount, purgedAssets: nil)
 		}
-		return ledger.openCount == 0
+		return true
 	}
 
 	private nonisolated func backupAlbum(
@@ -1365,44 +1375,20 @@ private struct AlbumExportContext: Sendable {
 	}
 
 	/// What still has to be saved for this photo or video in this album's folder; nil = nothing (it is all in the ledger).
-	/// The photo (or video) and the video of a Live Photo are two separate parts, each with its own key.
+	/// The rules are in AlbumExportLedger.plan (pure Swift, covered by the CI self-test).
 	func plan(for asset: PHAsset, categories: Set<PhotoBackupCategory>) -> AlbumAssetPlan? {
-		let isVideo = asset.mediaType == .video
-		let primaryKind: PhotoBackupCategory = isVideo ? .video : .photo
-		let isLivePhoto = asset.mediaType == .image && asset.mediaSubtypes.contains(.photoLive)
-		let primaryKey = AlbumExportLedger.key(
-			assetID: asset.localIdentifier, albumID: albumID, kind: primaryKind.rawValue)
-		let liveKey = AlbumExportLedger.key(
-			assetID: asset.localIdentifier, albumID: albumID, kind: PhotoBackupCategory.livePhoto.rawValue)
-		let wantsPrimary = categories.contains(primaryKind) && !ledger.isDone(primaryKey)
-		let wantsLive = isLivePhoto && categories.contains(.livePhoto) && !ledger.isDone(liveKey)
-		if !wantsPrimary && !wantsLive {
-			return nil
-		}
-		let parts = ledger.fileName(forAsset: asset.localIdentifier, folder: folderName, originalName: asset.originalFilename)
-		return AlbumAssetPlan(
-			primaryName: AlbumFolderNaming.composeFileName(stem: parts.stem, ext: parts.ext),
-			liveName: parts.stem + ".MOV",
-			primaryKey: primaryKey,
-			liveKey: liveKey,
-			wantsPrimary: wantsPrimary,
-			wantsLive: wantsLive
+		return ledger.plan(
+			assetID: asset.localIdentifier,
+			albumID: albumID,
+			folder: folderName,
+			isVideo: asset.mediaType == .video,
+			isLivePhoto: asset.mediaType == .image && asset.mediaSubtypes.contains(.photoLive),
+			saveImages: categories.contains(.photo),
+			saveVideos: categories.contains(.video),
+			saveLivePhotos: categories.contains(.livePhoto),
+			originalName: { asset.originalFilename }
 		)
 	}
-}
-
-/// Album mode: the file names and keys for one photo or video in one album folder.
-private struct AlbumAssetPlan: Sendable {
-	/// The photo or video, for example IMG_0001.HEIC
-	let primaryName: String
-	/// The video of a Live Photo, next to the picture: IMG_0001.MOV
-	let liveName: String
-	let primaryKey: String
-	let liveKey: String
-	/// Whether the photo (or video) still has to be saved
-	let wantsPrimary: Bool
-	/// Whether the Live Photo's video still has to be saved
-	let wantsLive: Bool
 }
 
 /// Album mode: the albums the user made, and the ones that came from a computer or an import. Not the smart albums (Favorites,

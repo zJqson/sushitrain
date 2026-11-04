@@ -301,6 +301,11 @@ final class AlbumExportLedger: @unchecked Sendable {
 
 	static let fileFormatVersion = 1
 
+	/// The last part of a ledger key (the same words as PhotoBackupCategory's raw values).
+	static let kindPhoto = "photo"
+	static let kindVideo = "video"
+	static let kindLive = "live"
+
 	/// The file name for one destination: `PhotoAlbumLedger-<16 hex digits>.json`.
 	static func fileName(forDestination destination: String) -> String {
 		return "PhotoAlbumLedger-" + AlbumFolderNaming.stableHash(destination) + ".json"
@@ -519,8 +524,13 @@ final class AlbumExportLedger: @unchecked Sendable {
 		unsavedCount += 1
 	}
 
+	/// Writes the file after `checkpointEveryChanges` changes or `checkpointEverySeconds`, but less often when the ledger is big (the
+	/// whole file is written each time): at least 1 second more per 1000 saved items and 1 change more per 25 saved items.
 	private func checkpointIfDue() {
-		if unsavedCount >= checkpointEveryChanges || Date().timeIntervalSince(lastSaveTime) >= checkpointEverySeconds {
+		let size = exported.count
+		let changesNeeded = max(checkpointEveryChanges, size / 25)
+		let secondsNeeded = max(checkpointEverySeconds, Double(size) / 1000.0)
+		if unsavedCount >= changesNeeded || Date().timeIntervalSince(lastSaveTime) >= secondsNeeded {
 			_ = writeFile()
 		}
 	}
@@ -567,5 +577,49 @@ final class AlbumExportLedger: @unchecked Sendable {
 		lock.lock()
 		defer { lock.unlock() }
 		return body()
+	}
+}
+
+// MARK: - What is still to be saved
+
+/// What still has to be saved for one photo or video in one album folder, and under which names and keys.
+struct AlbumAssetPlan: Sendable {
+	/// The photo or video, for example IMG_0001.HEIC
+	let primaryName: String
+	/// The video of a Live Photo, next to the picture: IMG_0001.MOV
+	let liveName: String
+	let primaryKey: String
+	let liveKey: String
+	/// Whether the photo (or video) still has to be saved
+	let wantsPrimary: Bool
+	/// Whether the Live Photo's video still has to be saved
+	let wantsLive: Bool
+}
+
+extension AlbumExportLedger {
+	/// What still has to be saved for this photo or video in this album (`albumID`, saved in the folder `folder`); nil = nothing,
+	/// everything wanted is in the ledger already. A photo (or video) and the video of its Live Photo are two separate parts, each
+	/// with its own key. `originalName` is asked only when something has to be saved (it can be slow to find out).
+	func plan(
+		assetID: String, albumID: String, folder: String, isVideo: Bool, isLivePhoto: Bool,
+		saveImages: Bool, saveVideos: Bool, saveLivePhotos: Bool, originalName: () -> String
+	) -> AlbumAssetPlan? {
+		let primaryKey = AlbumExportLedger.key(
+			assetID: assetID, albumID: albumID, kind: isVideo ? AlbumExportLedger.kindVideo : AlbumExportLedger.kindPhoto)
+		let liveKey = AlbumExportLedger.key(assetID: assetID, albumID: albumID, kind: AlbumExportLedger.kindLive)
+		let wantsPrimary = (isVideo ? saveVideos : saveImages) && !isDone(primaryKey)
+		let wantsLive = isLivePhoto && saveLivePhotos && !isDone(liveKey)
+		if !wantsPrimary && !wantsLive {
+			return nil
+		}
+		let parts = fileName(forAsset: assetID, folder: folder, originalName: originalName())
+		return AlbumAssetPlan(
+			primaryName: AlbumFolderNaming.composeFileName(stem: parts.stem, ext: parts.ext),
+			liveName: parts.stem + ".MOV",
+			primaryKey: primaryKey,
+			liveKey: liveKey,
+			wantsPrimary: wantsPrimary,
+			wantsLive: wantsLive
+		)
 	}
 }

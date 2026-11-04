@@ -291,6 +291,146 @@ struct AlbumNamingSelfTest {
 		let missing = AlbumExportLedger.load(destination: "d", fileURL: dir3.appendingPathComponent("nothing-here.json"))
 		expectTrue(missing.savedItemCount == 0 && missing.loadNote.contains("no ledger file"), "missing file: \(missing.loadNote)")
 
+		// 23. A whole story with the real planning code (the same calls the back-up makes, with a pretend photo library and a
+		//     pretend disk): a first pass, a second pass that must save nothing, a second photo with the same file name, a renamed
+		//     album, a crash in the middle of a file, a restart, and "Re-copy all photos".
+		struct StoryAsset {
+			let id: String
+			let name: String
+			let isVideo: Bool
+			let isLive: Bool
+		}
+		struct StoryAlbum {
+			let id: String
+			let title: String
+			let assets: [StoryAsset]
+		}
+		let storyDir = FileManager.default.temporaryDirectory.appendingPathComponent("albumnaming-selftest-" + UUID().uuidString)
+		let storyURL = storyDir.appendingPathComponent("ledger.json")
+		var story = AlbumExportLedger(destination: "story", fileURL: storyURL)
+		var disk: [String] = []
+
+		func savePart(_ name: String, folder: String, key: String) {
+			let relative = folder + "/" + name
+			story.expect(pathInFolder: "Photos/" + relative, key: key, relativePath: relative)
+			disk.append(relative)
+			story.completed(pathInFolder: "Photos/" + relative)
+		}
+		func saveAssets(_ assets: [StoryAsset], albumID: String, folder: String) -> Int {
+			var saved = 0
+			for asset in assets {
+				guard
+					let plan = story.plan(
+						assetID: asset.id, albumID: albumID, folder: folder, isVideo: asset.isVideo, isLivePhoto: asset.isLive,
+						saveImages: true, saveVideos: true, saveLivePhotos: true, originalName: { asset.name })
+				else {
+					continue
+				}
+				if plan.wantsPrimary {
+					savePart(plan.primaryName, folder: folder, key: plan.primaryKey)
+					saved += 1
+				}
+				if plan.wantsLive {
+					savePart(plan.liveName, folder: folder, key: plan.liveKey)
+					saved += 1
+				}
+			}
+			return saved
+		}
+		func runPass(_ albums: [StoryAlbum], noAlbum: [StoryAsset]) -> Int {
+			let names = story.assignAlbums(albums.map { AlbumFolderRef(id: $0.id, title: $0.title) })
+			var saved = 0
+			for album in albums.sorted(by: { $0.id < $1.id }) {
+				saved += saveAssets(album.assets, albumID: album.id, folder: names[album.id] ?? "?")
+			}
+			saved += saveAssets(
+				noAlbum, albumID: AlbumFolderNaming.noAlbumIdentifier, folder: AlbumFolderNaming.noAlbumFolderName)
+			return saved
+		}
+
+		let p1 = StoryAsset(id: "P1AAAAAA/L0/001", name: "IMG_0001.HEIC", isVideo: false, isLive: true)
+		let v1 = StoryAsset(id: "V1BBBBBB/L0/001", name: "IMG_0002.MOV", isVideo: true, isLive: false)
+		let p2 = StoryAsset(id: "P2CCCCCC/L0/001", name: "IMG_0003.JPG", isVideo: false, isLive: false)
+		let p3 = StoryAsset(id: "P3DDDDDD/L0/001", name: "IMG_0001.HEIC", isVideo: false, isLive: false)
+		let p4 = StoryAsset(id: "P4EEEEEE/L0/001", name: "IMG_0009.HEIC", isVideo: false, isLive: false)
+		let p5 = StoryAsset(id: "P5FFFFFF/L0/001", name: "IMG_0010.HEIC", isVideo: false, isLive: false)
+		let p6 = StoryAsset(id: "P6GGGGGG/L0/001", name: "IMG_0010.HEIC", isVideo: false, isLive: false)
+
+		// pass 1: p1 (a Live Photo) is in two albums, v1 is a video, p2 is in no album
+		let firstSaved = runPass(
+			[
+				StoryAlbum(id: "ALB-H", title: "Holiday", assets: [p1, v1]),
+				StoryAlbum(id: "ALB-M", title: "Mum", assets: [p1]),
+			], noAlbum: [p2])
+		expectTrue(firstSaved == 6, "pass 1 saves 6 files, saved \(firstSaved)")
+		expectTrue(
+			disk == [
+				"Holiday/IMG_0001.HEIC", "Holiday/IMG_0001.MOV", "Holiday/IMG_0002.MOV", "Mum/IMG_0001.HEIC", "Mum/IMG_0001.MOV",
+				"No album/IMG_0003.JPG",
+			], "pass 1 names, got \(disk)")
+
+		// pass 2: nothing changed, nothing is saved
+		let secondSaved = runPass(
+			[
+				StoryAlbum(id: "ALB-H", title: "Holiday", assets: [p1, v1]),
+				StoryAlbum(id: "ALB-M", title: "Mum", assets: [p1]),
+			], noAlbum: [p2])
+		expectTrue(secondSaved == 0 && disk.count == 6, "pass 2 saves nothing, saved \(secondSaved)")
+
+		// pass 3: a different photo with the same file name arrives in Holiday
+		let thirdSaved = runPass(
+			[
+				StoryAlbum(id: "ALB-H", title: "Holiday", assets: [p1, v1, p3]),
+				StoryAlbum(id: "ALB-M", title: "Mum", assets: [p1]),
+			], noAlbum: [p2])
+		expectTrue(thirdSaved == 1 && disk.last == "Holiday/IMG_0001_P3DDDD.HEIC", "pass 3: a clash gets a suffix, got \(disk.last ?? "-")")
+
+		// pass 4: the album Mum is renamed and gets a new photo: old photos stay where they are, the new one goes to the new folder
+		let fourthSaved = runPass(
+			[
+				StoryAlbum(id: "ALB-H", title: "Holiday", assets: [p1, v1, p3]),
+				StoryAlbum(id: "ALB-M", title: "Mum 2025", assets: [p1, p4]),
+			], noAlbum: [p2])
+		expectTrue(fourthSaved == 1 && disk.last == "Mum 2025/IMG_0009.HEIC", "pass 4: rename, got \(disk.last ?? "-")")
+		expectTrue(!disk.contains("Mum 2025/IMG_0001.HEIC"), "pass 4: the old photos are not saved again under the new name")
+
+		// crash: p5 was announced but the app was killed before the file was finished; the ledger was saved before that
+		let plan5 = story.plan(
+			assetID: p5.id, albumID: "ALB-H", folder: "Holiday", isVideo: false, isLivePhoto: false,
+			saveImages: true, saveVideos: true, saveLivePhotos: true, originalName: { p5.name })
+		expectTrue(plan5 != nil && plan5?.primaryName == "IMG_0010.HEIC", "p5 is planned")
+		if let plan5 = plan5 {
+			story.expect(pathInFolder: "Photos/Holiday/IMG_0010.HEIC", key: plan5.primaryKey, relativePath: "Holiday/IMG_0010.HEIC")
+		}
+		expectTrue(story.saveNow(), "the ledger is saved before the crash")
+		story = AlbumExportLedger.load(destination: "story", fileURL: storyURL)
+		let albumsAfterCrash = [
+			StoryAlbum(id: "ALB-H", title: "Holiday", assets: [p1, v1, p3, p5]),
+			StoryAlbum(id: "ALB-M", title: "Mum 2025", assets: [p1, p4]),
+		]
+		// pass 5 after the restart: only p5 is saved, under the same name
+		let fifthSaved = runPass(albumsAfterCrash, noAlbum: [p2])
+		expectTrue(fifthSaved == 1 && disk.last == "Holiday/IMG_0010.HEIC", "pass 5 after the restart, got \(disk.last ?? "-")")
+
+		// pass 6: another photo with the name of p5 (the owner of the name is remembered across the restart)
+		let albumsWithP6 = [
+			StoryAlbum(id: "ALB-H", title: "Holiday", assets: [p1, v1, p3, p5, p6]),
+			StoryAlbum(id: "ALB-M", title: "Mum 2025", assets: [p1, p4]),
+		]
+		let sixthSaved = runPass(albumsWithP6, noAlbum: [p2])
+		expectTrue(sixthSaved == 1 && disk.last == "Holiday/IMG_0010_P6GGGG.HEIC", "pass 6, got \(disk.last ?? "-")")
+
+		// "Re-copy all photos": everything is saved again, to the same names. Only the renamed album is different: its old photos
+		// are now saved a second time into the folder with the new name (the old folder stays).
+		let namesBefore = Set(disk)
+		story.ignoreExisting = true
+		let recopied = runPass(albumsWithP6, noAlbum: [p2])
+		expectTrue(recopied == 10, "re-copy saves all 10 files again, saved \(recopied)")
+		let newNames = Set(disk).subtracting(namesBefore)
+		expectTrue(
+			newNames == ["Mum 2025/IMG_0001.HEIC", "Mum 2025/IMG_0001.MOV"],
+			"re-copy keeps the names and fills the renamed album's new folder, new names: \(newNames.sorted())")
+
 		print("album naming self-test: \(checks) checks, \(failures) failed")
 		exit(failures == 0 ? 0 : 1)
 	}

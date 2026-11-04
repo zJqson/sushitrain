@@ -107,19 +107,25 @@ that is only in those goes to `No album`.
   saved. What was saved is written in a small file, the *ledger* (`PhotoAlbumLedger-<hash>.json` in the app's Application Support
   folder; one per back-up folder + path). A key `photo id|album id|photo/video/live` is added only after its file has been written,
   the file is written atomically (temporary file, then rename) and every few files, so a crash or an iOS kill loses at most the last
-  few keys; those files are found on the disk the next time and are recognised, not saved again. The change token is remembered only
-  after a run in which everything was saved, so a failed file is tried again at the next change.
+  few keys; those files are found on the disk the next time and are recognised, not saved again. When a run ends (not cancelled, no
+  error) the library state is remembered, so the next automatic run stops at once if nothing changed. A file that could not be
+  saved in a run that ended normally (for example a photo that is only in iCloud) is tried again at the next change in the library
+  or when you press *Back-up new photos* yourself (that button always looks at all albums). A run that is cancelled (iOS ran out
+  of background time) or ends with an error remembers nothing, so the next trigger continues where the ledger says.
 - **Nothing is deleted.** Not on the PC and not on the phone. In this mode "Remove saved photos from source" and "Add to album" are
   hidden and ignored (a photo can be in several albums), and so are "Save photo adjustment data (AAE)", the time-zone setting and
   "Live photo file extension" (the Live Photo video is always `<same name>.MOV`). A file that is already in the folder, or that you
   deleted there on purpose (Syncthing knows), is not saved again. "Re-copy all photos" saves everything again to the same names.
 - **Still used:** the photo/live/video switches, "Path in folder", "Do not save photos older than six months" (**on by default**:
-  switch it off if you want every photo, however old), "Save all photos in a burst", and all background and automatic settings.
+  switch it off if you want every photo, however old; in this mode a photo that was saved once is remembered for good by the
+  ledger, so switching it off does not bring deleted photos back), "Save all photos in a burst", and all background and
+  automatic settings.
 
 Known limits:
 
 1. **Renaming an album** on the phone: photos saved after that go to a folder with the new name; the folder with the old name stays
    (nothing is renamed or moved on the PC). Rename the old folder on the PC by hand if you want one folder; Syncthing syncs that.
+   Or press *Re-copy all photos*: that saves the whole album again into the folder with the new name (the old folder stays).
 2. **A photo in two albums is stored twice**: twice the space on the PC, and on the phone for as long as the exported copies stay
    selected for sync (as with the original app: "Exported photos will take up storage space on your device ...").
 3. If the ledger file is lost (app deleted and reinstalled, data cleared), every photo is checked again: files that are already
@@ -140,8 +146,10 @@ Undo: `git revert <the album-folders commit>` (see the commit list) and push wit
 The workflow step `albumnaming` (before the long steps) compiles `Sushitrain/AlbumFolderNaming.swift` together with
 `tools/albumnaming_selftest/AlbumNamingSelfTest.swift` using the plain `swiftc` of the runner and runs it. It checks every naming
 rule (forbidden characters, control characters, NFC, emoji, long names, device names, duplicate and case-only duplicate names,
-stable numbering, file-name clashes, the hash, saving and loading of the ledger, a damaged ledger, another destination). A failed
-check prints a line starting with `ERROR:` and stops the build in seconds. To run it on a Mac:
+stable numbering, file-name clashes, the hash, saving and loading of the ledger, a damaged ledger, another destination) and then
+plays a whole story with the same planning calls the back-up makes (first pass, a pass that must save nothing, two photos with the
+same file name, a renamed album, a crash in the middle of a file, a restart, "Re-copy all photos"). A failed check prints a line
+starting with `ERROR:` and stops the build in seconds. To run it on a Mac:
 `swiftc -swift-version 6 -parse-as-library -o /tmp/selftest Sushitrain/AlbumFolderNaming.swift tools/albumnaming_selftest/AlbumNamingSelfTest.swift && /tmp/selftest`.
 
 ## Not proven yet

@@ -367,9 +367,16 @@ struct PhotoBackupSettingsView: View {
 							photoBackup.maxAgeDays = $0 ? 180 : 0
 						}))
 			} footer: {
-				Text(
-					"If you delete photos from the folder, this will be remembered for six months, so they will not be saved to the folder again during this time. Enable this setting to prevent these photos from being exported again after six months."
-				)
+				if photoBackup.isEveryAlbum {
+					Text(
+						"With this switch on, only photos from the last six months are saved. Switch it off to also save older photos. In \"Every album\" mode a photo that was saved once is remembered for good: it is not saved again when you delete it from the folder, also not after six months."
+					)
+				}
+				else {
+					Text(
+						"If you delete photos from the folder, this will be remembered for six months, so they will not be saved to the folder again during this time. Enable this setting to prevent these photos from being exported again after six months."
+					)
+				}
 			}.disabled(photoBackup.isBackingUp || photoBackup.selectedAlbumID.isEmpty)
 
 			// Burst photo export
