@@ -1,11 +1,11 @@
-run 1: SUCCESS - 169be91 - 2026-11-04T06:04:21Z
+run 2: SUCCESS - 86d02df - 2026-11-04T06:50:01Z
 
-Run:      https://github.com/zJqson/sushitrain/actions/runs/41782230695 (attempt 1)
-Commit:   169be91a116d7e91ad4488e897bde746157cecd4
+Run:      https://github.com/zJqson/sushitrain/actions/runs/41787544389 (attempt 1)
+Commit:   86d02df902271c78728b9424b919a7493346d320
 Status:   SUCCESS
-Steps:    checkout=success xcode=success platform=success go=success identity=success entitlements=success core=success ios=success package=success check_ipa=success release=success
-Release:  https://github.com/zJqson/sushitrain/releases/download/build-1/PhotoTrain.ipa
-IPA:      PhotoTrain.ipa 12517942 bytes, sha256 a6a127661d957dff236163ffaff5dc63ee6c1f2febce73d65777d0da0380b558
-Log:      run-1.log (1303 lines)
+Steps:    checkout=success xcode=success albumnaming=success platform=success go=success identity=success entitlements=success core=success ios=success package=success check_ipa=success release=success
+Release:  https://github.com/zJqson/sushitrain/releases/download/build-2/PhotoTrain.ipa
+IPA:      PhotoTrain.ipa 12559704 bytes, sha256 a942d630d60ffba3c07e37146e8db5c4578f092d295ba0ab8b402ba3d5838e52
+Log:      run-2.log (1304 lines)
 
 No error lines found in the build output.
