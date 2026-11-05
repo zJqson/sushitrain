@@ -1,0 +1,18 @@
+build log of run 11 (attempt 1), commit cf9ba4eac8aa2dce65cb12fbb504e9c6982bd3bb
+started 2026-11-05T01:53:54Z
+=== select Xcode (01:53:54Z) ===
+Xcode 27.0
+Build version 27A266a
+Python 3.15.1
+git version 2.56.0
+gh version 2.103.2 (2026-10-23)
+https://github.com/cli/cli/releases/tag/v2.103.2
+Filesystem        Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk2s1s1   150Gi    13Gi    36Gi    27%    484k  375M    0%   /
+=== album naming self-test (01:53:59Z) ===
+album naming self-test: 298 checks, 0 failed
+=== photo change planner self-test (01:54:05Z) ===
+photo change self-test: 139 checks, 0 failed
+=== keep-alive rules self-test (01:54:06Z) ===
+error: link command failed with exit code 1 (use -v to see invocation)
+clang: error: no such file or directory: 'n'
