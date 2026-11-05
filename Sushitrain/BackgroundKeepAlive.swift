@@ -326,20 +326,32 @@
 				try? session.setPreferredIOBufferDuration(0.2)
 				try session.setActive(true)
 
-				guard let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1),
-					let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8000)
-				else {
+				let newEngine = AVAudioEngine()
+				let newPlayer = AVAudioPlayerNode()
+				// Build 14: the silence is made in the format the audio hardware runs in (the mixer's output format), so the mixer has nothing to
+				// convert in every audio cycle. Build 13 made it as 8000 Hz mono, which the mixer had to convert to 44.1 / 48 kHz stereo about
+				// 10 times a second (a suspect for the extra CPU seen in build 13, not yet proven). When the hardware format is not usable
+				// (no audio route yet), the old small format is used: it sounds the same, it only costs more.
+				let hardware = newEngine.mainMixerNode.outputFormat(forBus: 0)
+				let hardwareUsable =
+					hardware.sampleRate > 0 && hardware.channelCount > 0 && !hardware.isInterleaved && hardware.commonFormat == .pcmFormatFloat32
+				guard let format = hardwareUsable ? hardware : AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1) else {
 					problem("could not make the silent sound")
 					return
 				}
-				buffer.frameLength = 8000
-				if let channel = buffer.floatChannelData?[0] {
-					for index in 0..<Int(buffer.frameLength) {
-						channel[index] = 0
+				let frames = AVAudioFrameCount(format.sampleRate)  // one second
+				guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
+					problem("could not make the silent sound")
+					return
+				}
+				buffer.frameLength = frames
+				if let channels = buffer.floatChannelData {
+					for channelIndex in 0..<Int(format.channelCount) {
+						for index in 0..<Int(frames) {
+							channels[channelIndex][index] = 0
+						}
 					}
 				}
-				let newEngine = AVAudioEngine()
-				let newPlayer = AVAudioPlayerNode()
 				newEngine.attach(newPlayer)
 				newEngine.connect(newPlayer, to: newEngine.mainMixerNode, format: format)
 				newPlayer.volume = 0
