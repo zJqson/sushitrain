@@ -195,6 +195,9 @@ struct AlbumNamingSelfTest {
 		expectEqual(AlbumFolderNaming.shortID("9F2D7C2A-6A1B-4B7E/L0/001", length: 6), "9F2D7C", "short id")
 		expectEqual(AlbumFolderNaming.shortID("///---", length: 6), "id", "short id of an identifier without letters")
 		expectEqual(AlbumFolderNaming.sanitizeExtension(" HE:IC. "), "HE_IC", "extension cleaning")
+		expectEqual(AlbumFolderNaming.sanitizeExtension("abcdefghijklmno. xyz"), "abcdefghijklmno", "a cut extension never ends in a dot")
+		expectEqual(AlbumFolderNaming.sanitizeExtension("abcdefghijklm   xyz"), "abcdefghijklm", "a cut extension never ends in a space")
+		expectTrue(AlbumFolderNaming.sanitizeExtension(String(repeating: "x", count: 40)).count == 16, "a very long extension is cut to 16 characters")
 		expectEqual(AlbumFolderNaming.composeFileName(stem: "IMG_1", ext: "HEIC"), "IMG_1.HEIC", "compose")
 		expectEqual(AlbumFolderNaming.composeFileName(stem: "IMG_1", ext: ""), "IMG_1", "compose without extension")
 

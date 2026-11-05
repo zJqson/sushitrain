@@ -71,7 +71,8 @@ enum AlbumFolderNaming {
 		var cleaned = replaceIllegalCharacters(ext).precomposedStringWithCanonicalMapping
 		cleaned = trimEdges(cleaned)
 		if cleaned.count > maxExtensionLength {
-			cleaned = String(cleaned.prefix(maxExtensionLength))
+			// The cut can leave a space or a dot at the end (Windows cannot store such a name), so trim again
+			cleaned = trimEdges(String(cleaned.prefix(maxExtensionLength)))
 		}
 		return cleaned
 	}
