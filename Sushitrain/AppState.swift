@@ -8,6 +8,7 @@ import SwiftUI
 import Combine
 import UserNotifications
 import Network
+import os
 
 enum FolderMetric: String {
 	case none = ""
@@ -150,6 +151,9 @@ class SushitrainDelegate: NSObject {
 
 	// Fork: keep the app running in the background with an iOS location session (see BackgroundKeepAlive)
 	@AppStorage("keepRunningInBackground") var keepRunningInBackground: Bool = true
+
+	// Fork: also play an inaudible sound as a second keeper (see SilentAudioKeeper in BackgroundKeepAlive.swift)
+	@AppStorage("keepAliveSilentAudio") var keepAliveSilentAudio: Bool = true
 }
 
 @MainActor class AppPersistentStatistics: ObservableObject {
@@ -292,6 +296,14 @@ struct SyncState: Equatable {
 			// Fork: also needed on a launch in the background (iOS relaunches us after a location event), so do it here
 			self.keepAlive.apply()
 			self.autoPhotoBackup.refreshRegistration()
+			// Fork: if the app was found stopped (iOS ended it, or the phone restarted), say so; then note this start
+			if let stopped = AliveStore.readAtLaunch() {
+				Log.note(stopped)
+			}
+			AliveStore.markAlive("started")
+			Log.note(
+				"Started; the app is \(BackgroundKeepAlive.describe(UIApplication.shared.applicationState)); free memory the app may still use: \(os_proc_available_memory() / 1_000_000) MB"
+			)
 		#endif
 	}
 
@@ -547,7 +559,7 @@ struct SyncState: Equatable {
 		pm.pathUpdateHandler = { [weak client] path in
 			Task { @MainActor in
 				Log.info("Network path change: \(path)")
-				Log.info(
+				Log.note(
 					"Network path flags: expensive=\(path.isExpensive) constrained=\(path.isConstrained) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular))"
 				)
 				self.currentNetworkPath = path
@@ -571,6 +583,8 @@ struct SyncState: Equatable {
 		self.pathMonitor = pm
 
 		self.pingTimer = Timer.scheduledTimer(withTimeInterval: 50, repeats: true) { [weak client] timer in
+			// Fork: this timer exists anyway; it also leaves a sign of life (written at most every 5 minutes, see AliveStore)
+			AliveStore.markAlive("running", minimumSpacing: 300)
 			if let measurement = client?.measurements {
 				Task {
 					try? await goTask {
@@ -877,26 +891,47 @@ struct SyncState: Equatable {
 
 	// Whether the app should disable connectivity because of the network connection type in use and/or low power mode
 	var shouldDisableConnectivity: Bool {
-		// Disable because we are on low power mode
-		if userSettings.disableDevicesInLowPowerMode && self.isLowPowerModeEnabled {
-			return true
-		}
+		return self.connectivityBlockReason != nil
+	}
 
-		if userSettings.disableDevicesOnCellular || userSettings.disableDevicesOnMetered {
-			if let path = self.currentNetworkPath {
-				return (deviceHasCellularCapability() && userSettings.disableDevicesOnCellular && path.usesInterfaceType(.cellular))
-					|| (userSettings.disableDevicesOnMetered && (path.isExpensive || path.isConstrained))
-			}
-			else {
-				// Disable, just to be sure
-				return true
-			}
+	// Fork: why the sync is off right now (nil = it may run). The rules are in KeepAliveRules.swift (ConnectivityRules, covered by the CI
+	// self-test); the behaviour is the same as before: Low Power Mode, an unknown network, mobile data, a metered network, Low Data Mode.
+	var connectivityBlockReason: String? {
+		let settings = ConnectivitySettings(
+			blockOnCellular: userSettings.disableDevicesOnCellular,
+			blockOnMetered: userSettings.disableDevicesOnMetered,
+			blockInLowPowerMode: userSettings.disableDevicesInLowPowerMode)
+		let path = self.currentNetworkPath
+		let flags = ConnectivityFlags(
+			pathKnown: path != nil,
+			usesCellular: path?.usesInterfaceType(.cellular) ?? false,
+			isExpensive: path?.isExpensive ?? false,
+			isConstrained: path?.isConstrained ?? false,
+			lowPowerMode: self.isLowPowerModeEnabled,
+			deviceHasCellular: deviceHasCellularCapability())
+		return ConnectivityRules.blockReason(flags: flags, settings: settings)
+	}
+
+	// Fork: say in the log (warning level, so it shows) when the network rules switch the sync off or on again
+	@ObservationIgnored private var lastConnectivityNote: String? = "(not decided yet)"
+
+	private func noteConnectivityDecision() {
+		let reason = self.connectivityBlockReason
+		if reason == self.lastConnectivityNote {
+			return
 		}
-		return false
+		self.lastConnectivityNote = reason
+		if let why = reason {
+			Log.note("Sync is off because \(why).")
+		}
+		else {
+			Log.note("Sync is allowed on this network (Wi-Fi, not metered).")
+		}
 	}
 
 	nonisolated func updateDeviceSuspension() async {
 		guard await self.hasLoadedClient else { return }
+		await self.noteConnectivityDecision()
 		do {
 			let client = self.client
 			// All devices are paused when the app is suspended (and unpaused when we get back to the foreground)
@@ -972,7 +1007,7 @@ struct SyncState: Equatable {
 		#if os(iOS)
 			// Fork: while the location session keeps the process alive we stay connected in the background. Syncthing
 			// keeps running; the network rules (cellular / metered) still apply through the network monitor, which we leave on.
-			if self.keepAlive.isRunning {
+			if self.keepAlive.isKeepingAlive {
 				Log.info("Keep-alive is running: staying connected instead of suspending")
 				try? self.client.setReconnectIntervalS(60)
 				self.client.ignoreEvents = true
@@ -1028,7 +1063,8 @@ struct SyncState: Equatable {
 	}
 
 	func onScenePhaseChange(from oldPhase: ScenePhase, to newPhase: ScenePhase) {
-		Log.info("Phase change from \(oldPhase) to \(newPhase) lingeringEnabled=\(self.userSettings.lingeringEnabled)")
+		Log.note("Phase change from \(oldPhase) to \(newPhase) lingeringEnabled=\(self.userSettings.lingeringEnabled)")
+		AliveStore.markAlive("scene \(newPhase)")
 
 		switch newPhase {
 		case .background:

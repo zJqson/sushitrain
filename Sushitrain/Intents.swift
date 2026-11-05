@@ -56,6 +56,9 @@ extension AppState {
 struct SynchronizePhotosIntent: AppIntent {
 	static let title: LocalizedStringResource = "Back-up new photos"
 
+	// Fork: a Shortcuts automation (for example "Camera is closed") must be able to run this while the phone is locked
+	static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+
 	@Dependency private var appState: AppState
 
 	func perform() async throws -> some IntentResult {
@@ -148,6 +151,9 @@ struct GenerateThumbnailsIntent: AppIntent {
 
 struct SynchronizeIntent: AppIntent {
 	static let title: LocalizedStringResource = "Synchronize for a while"
+
+	// Fork: same reason as for "Back-up new photos": it must run from an automation while the phone is locked
+	static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
 	@Dependency private var appState: AppState
 

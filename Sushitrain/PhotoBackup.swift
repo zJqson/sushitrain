@@ -281,7 +281,8 @@ enum PhotoBackupProgress {
 			defer {
 				if everyAlbum {
 					let milliseconds = Int((DispatchTime.now().uptimeNanoseconds - runStarted) / 1_000_000)
-					Log.info(runReport.logLine(milliseconds: milliseconds, result: runResult))
+					Log.note(runReport.logLine(milliseconds: milliseconds, result: runResult))
+					AliveStore.markAlive("photo back-up run")
 				}
 			}
 

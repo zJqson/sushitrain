@@ -4,6 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this file,
 // You can obtain one at https://mozilla.org/MPL/2.0/.
 #if os(iOS)
+	import AVFoundation
 	import CoreLocation
 	import Photos
 	import SwiftUI
@@ -34,6 +35,11 @@
 		private let manager: CLLocationManager
 		private var activitySession: CLBackgroundActivitySession? = nil
 		private unowned let appState: AppState
+		/// The second keeper (inaudible sound), see SilentAudioKeeper
+		let audio = SilentAudioKeeper()
+
+		/// True while anything keeps the app running in the background: the location session or the silent sound.
+		var isKeepingAlive: Bool { return isRunning || audio.isRunning }
 
 		init(appState: AppState) {
 			self.manager = CLLocationManager()
@@ -42,6 +48,7 @@
 			// Must happen at every launch, including launches in the background, so iOS can deliver events
 			manager.delegate = self
 			authorizationStatus = manager.authorizationStatus
+			audio.onChange = { [weak self] in self?.objectWillChange.send() }
 		}
 
 		/// Start or stop so that the running state matches the setting and the permission. Safe to call often.
@@ -51,6 +58,7 @@
 			Log.info(
 				"Keep-alive: setting=\(wanted) permission=\(Self.describe(authorizationStatus)) running=\(isRunning) autoPhotoBackup=\(appState.photoBackup.automatic) blockCellular=\(appState.userSettings.disableDevicesOnCellular) blockMetered=\(appState.userSettings.disableDevicesOnMetered)"
 			)
+			updateAudio()
 			guard wanted else {
 				stop(reason: "the setting is off")
 				return
@@ -81,6 +89,17 @@
 
 			@unknown default:
 				stop(reason: "unknown location permission state")
+			}
+		}
+
+		/// Starts or stops the silent sound so that it matches the two settings. It does not depend on the location permission: it keeps
+		/// the app running by itself. Safe to call often (a start that failed, for example in a launch in the background, is tried again).
+		private func updateAudio() {
+			if appState.userSettings.keepRunningInBackground && appState.userSettings.keepAliveSilentAudio {
+				audio.start()
+			}
+			else {
+				audio.stop(reason: "the setting is off")
 			}
 		}
 
@@ -141,6 +160,15 @@
 			Log.warn("Keep-alive: location manager error: \(message)")
 		}
 
+		static func describe(_ state: UIApplication.State) -> String {
+			switch state {
+			case .active: return "in front"
+			case .inactive: return "changing between front and back"
+			case .background: return "in the background"
+			@unknown default: return "in an unknown state"
+			}
+		}
+
 		static func describe(_ status: CLAuthorizationStatus) -> String {
 			switch status {
 			case .notDetermined: return "not asked yet"
@@ -160,6 +188,15 @@
 			}
 			if let last = lastLocationEvent {
 				text += " " + String(localized: "Last wake-up from iOS: \(last.formatted(date: .abbreviated, time: .shortened)).")
+			}
+			if audio.isRunning {
+				text += " " + String(localized: "Silent sound: playing.")
+			}
+			else if appState.userSettings.keepAliveSilentAudio, let problem = audio.lastProblem {
+				text += " " + String(localized: "Silent sound: not playing (\(problem)).")
+			}
+			if let stopped = AliveStore.lastStopMessage() {
+				text += " " + stopped
 			}
 			return text
 		}
@@ -214,7 +251,11 @@
 		}
 
 		nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-			Task { @MainActor in self.schedule(reason: "photo library changed") }
+			Task { @MainActor in
+				Log.note("Photo library changed; the app is \(BackgroundKeepAlive.describe(UIApplication.shared.applicationState))")
+				AliveStore.markAlive("photo library changed")
+				self.schedule(reason: "photo library changed")
+			}
 		}
 
 		/// Ask for a back-up run after a quiet period. Repeated calls restart the wait, so a burst of photos, or a Live Photo
@@ -249,8 +290,143 @@
 				return
 			}
 
-			Log.info("Auto photo backup: starting (\(reason))")
+			Log.note("Auto photo backup: starting (\(reason))")
 			photoBackup.backup(appState: appState, fullExport: false, isInBackground: true)
+		}
+	}
+
+	/// A second keeper: plays one second of silence over and over (a buffer of zeros, volume 0).
+	///
+	/// Why: the location session alone keeps the app running, but iOS ends such a background app first when memory runs short (for example
+	/// when the Camera and another big app are open). An app that plays sound counts as a music player for iOS: it is not frozen in the
+	/// background and it is among the last to be closed. The sound is mixed with other apps' sound (music, calls and videos keep playing)
+	/// and nothing can be heard. Costs a little battery. "audio" is already in UIBackgroundModes. Event driven: no timer.
+	///
+	/// A start that fails (for example in a launch in the background, where iOS refuses a new audio session) is tried again the next time
+	/// BackgroundKeepAlive.apply() runs, which is every time the app comes to the front.
+	@MainActor final class SilentAudioKeeper: NSObject {
+		private(set) var isRunning = false
+		private(set) var lastProblem: String? = nil
+		var onChange: (@MainActor () -> Void)? = nil
+
+		private var engine: AVAudioEngine? = nil
+		private var player: AVAudioPlayerNode? = nil
+		private var observing = false
+		private var lastStart = Date.distantPast
+
+		func start() {
+			if isRunning { return }
+			// Do not start again and again when something keeps stopping the engine
+			if Date.now.timeIntervalSince(lastStart) < 1 { return }
+			lastStart = Date.now
+			do {
+				let session = AVAudioSession.sharedInstance()
+				try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+				try session.setActive(true)
+
+				guard let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1),
+					let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8000)
+				else {
+					problem("could not make the silent sound")
+					return
+				}
+				buffer.frameLength = 8000
+				if let channel = buffer.floatChannelData?[0] {
+					for index in 0..<Int(buffer.frameLength) {
+						channel[index] = 0
+					}
+				}
+				let newEngine = AVAudioEngine()
+				let newPlayer = AVAudioPlayerNode()
+				newEngine.attach(newPlayer)
+				newEngine.connect(newPlayer, to: newEngine.mainMixerNode, format: format)
+				newPlayer.volume = 0
+				try newEngine.start()
+				newPlayer.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
+				newPlayer.play()
+
+				engine = newEngine
+				player = newPlayer
+				isRunning = true
+				lastProblem = nil
+				addObservers()
+				Log.note("Keep-alive: silent sound started")
+				onChange?()
+			}
+			catch {
+				problem(error.localizedDescription)
+			}
+		}
+
+		func stop(reason: String) {
+			let wasRunning = isRunning
+			player?.stop()
+			engine?.stop()
+			player = nil
+			engine = nil
+			isRunning = false
+			if wasRunning {
+				try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+				Log.note("Keep-alive: silent sound stopped (\(reason))")
+				onChange?()
+			}
+		}
+
+		private func problem(_ text: String) {
+			if lastProblem != text {
+				Log.note("Keep-alive: silent sound did not start: \(text)")
+			}
+			lastProblem = text
+			isRunning = false
+			onChange?()
+		}
+
+		private func restart(_ why: String) {
+			Log.note("Keep-alive: silent sound restarts (\(why))")
+			player?.stop()
+			engine?.stop()
+			player = nil
+			engine = nil
+			isRunning = false
+			start()
+		}
+
+		private func handleInterruption(_ typeValue: UInt?) {
+			guard let raw = typeValue, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+			switch type {
+			case .began:
+				Log.note("Keep-alive: silent sound interrupted (a call, Siri or another app took the audio)")
+			case .ended:
+				restart("the interruption ended")
+			@unknown default:
+				break
+			}
+		}
+
+		private func addObservers() {
+			if observing { return }
+			observing = true
+			let center = NotificationCenter.default
+			center.addObserver(
+				self, selector: #selector(audioInterrupted(_:)), name: AVAudioSession.interruptionNotification, object: nil)
+			center.addObserver(
+				self, selector: #selector(audioEngineChanged(_:)), name: .AVAudioEngineConfigurationChange, object: nil)
+			center.addObserver(
+				self, selector: #selector(audioServicesReset(_:)), name: AVAudioSession.mediaServicesWereResetNotification, object: nil)
+		}
+
+		// The notifications arrive on any thread: read what is needed, then hop to the main actor (same pattern as the location delegate)
+		@objc private nonisolated func audioInterrupted(_ note: Notification) {
+			let typeValue = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+			Task { @MainActor in self.handleInterruption(typeValue) }
+		}
+
+		@objc private nonisolated func audioEngineChanged(_ note: Notification) {
+			Task { @MainActor in self.restart("the audio set-up changed") }
+		}
+
+		@objc private nonisolated func audioServicesReset(_ note: Notification) {
+			Task { @MainActor in self.restart("iOS reset its audio services") }
 		}
 	}
 
@@ -265,6 +441,9 @@
 				Toggle("Keep running in the background", isOn: userSettings.$keepRunningInBackground)
 					.onChange(of: userSettings.keepRunningInBackground) { _, _ in keepAlive.apply() }
 
+				Toggle("Also play silence (a second keeper)", isOn: userSettings.$keepAliveSilentAudio)
+					.onChange(of: userSettings.keepAliveSilentAudio) { _, _ in keepAlive.apply() }
+
 				Text(keepAlive.statusText).font(.footnote).foregroundStyle(.secondary)
 
 				if userSettings.keepRunningInBackground && keepAlive.authorizationStatus != .authorizedAlways {
@@ -276,7 +455,7 @@
 				Text("Keep running")
 			} footer: {
 				Text(
-					"iOS freezes apps that are in the background. With this switch on, the app uses the lowest-accuracy location service only to stop iOS from freezing it, so new photos are backed up by themselves. Your position is never stored, logged or sent anywhere. iOS shows a blue indicator while this runs, and it uses more battery."
+					"iOS freezes apps that are in the background. With this switch on, the app uses the lowest-accuracy location service only to stop iOS from freezing it, so new photos are backed up by themselves. Your position is never stored, logged or sent anywhere. iOS shows a blue indicator while this runs, and it uses more battery. \"Also play silence\" adds an inaudible sound: iOS then treats the app like a music player and closes it last when memory runs low (other apps' sound keeps playing; it costs a little more battery). Do not swipe the app away in the app switcher: iOS then does not start it again by itself until you open it once."
 				)
 			}
 		}

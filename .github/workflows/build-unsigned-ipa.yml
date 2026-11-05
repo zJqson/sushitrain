@@ -122,6 +122,21 @@ jobs:
             "$T/selftest"
           } 2>&1 | tee -a "$BUILD_LOG"
 
+      - id: keepalive
+        name: Self-test of the keep-alive rules (plain swiftc, seconds)
+        # Sushitrain/KeepAliveRules.swift (no Photos / UIKit / Network imports) holds the network rules of the sync (Wi-Fi only, never
+        # mobile data, never a metered or Low Data Mode network) and the "sign of life" note. This compiles it together with a
+        # self-test program (tools/keepalive_selftest) and runs it; a failed check ("ERROR: ..." lines) stops the build in seconds.
+        timeout-minutes: 5
+        run: |
+          {
+            echo "=== keep-alive rules self-test ($(date -u +%H:%M:%SZ)) ==="
+            T="$RUNNER_TEMP/keepalive-selftest"
+            mkdir -p "$T"
+            xcrun swiftc -swift-version 6 -parse-as-library -o "$T/selftest" \n              Sushitrain/KeepAliveRules.swift tools/keepalive_selftest/KeepAliveSelfTest.swift
+            "$T/selftest"
+          } 2>&1 | tee -a "$BUILD_LOG"
+
       - id: platform
         name: Install the iOS platform (upstream does this too)
         # soft step: if the platform is already on the image or the download fails, the archive step is the real judge
@@ -286,6 +301,7 @@ jobs:
             xcode=${{ steps.xcode.conclusion }}
             albumnaming=${{ steps.albumnaming.conclusion }}
             photochange=${{ steps.photochange.conclusion }}
+            keepalive=${{ steps.keepalive.conclusion }}
             platform=${{ steps.platform.conclusion }}
             go=${{ steps.go.conclusion }}
             identity=${{ steps.identity.conclusion }}

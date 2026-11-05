@@ -349,7 +349,7 @@ enum ContinuedTaskType {
 
 		func inactivate() {
 			// Fork: with the keep-alive running the app is not frozen when it leaves the screen, so no need to cancel
-			if self.currentBackgroundTask == nil && !self.appState.keepAlive.isRunning {
+			if self.currentBackgroundTask == nil && !self.appState.keepAlive.isKeepingAlive {
 				Log.info(
 					"Canceling photo back-up because we are moving to the inactive state, and we were not started from a background task."
 				)
@@ -525,8 +525,8 @@ enum ContinuedTaskType {
 				run.ended = Date.now
 
 				Log.info("Background sync stopped at \(run.ended!.debugDescription)")
-				if self.appState.keepAlive.isRunning {
-					// Fork: the location session keeps the app alive, so leave the photo back-up and the peers running
+				if self.appState.keepAlive.isKeepingAlive {
+					// Fork: the location session (or the silent sound) keeps the app alive, so leave the photo back-up and the peers running
 					Log.info("Keep-alive is running: not cancelling photo back-up and not suspending peers")
 				}
 				else {

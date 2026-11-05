@@ -231,6 +231,68 @@ with `Photo back-up run`. On the PC the photo appears in the `No album` folder (
 Undo: revert the fast-path commits, `git revert --no-edit 26326cc..HEAD` (26326cc is the build-7 commit just before them), and push with
 `push_fork.ps1`. The setting `photoBackupFastPathMaxAssets` = 0 would also switch the fast path off, but it has no screen yet.
 
+## Staying alive in the background, screen off (build 11)
+
+**What was measured on the real iPhone (iOS 27.0.1), with the phone's own system log read over USB.**
+
+- With the screen locked and nothing else running, the app lived at least 33 minutes in the background (22 of them with the screen locked)
+  and held the iOS "Location subscription" assertion; it used 69 MB of memory and about 2 % CPU. So **the screen being off does not stop it.**
+- The loss at 18:48:30 was a **force-quit**, not iOS freezing the app: SpringBoard logged `killed from app switcher`, exception code
+  `User Initiated Quit (0xDEADFA11)`. A person had woken the screen, opened the app switcher and swiped the card away. There is no crash
+  report and no jetsam report. **iOS never starts a force-quit app again by itself** (no location event, no background refresh) until
+  somebody opens it. No app can change that.
+- The earlier loss at 18:00:40 happened while a big foreground app (Facebook) was being used; nothing was logged on the phone at that
+  time, so a memory kill by that big app is possible but not proven.
+- The log lines of the Syncthing connection on the PC show two kinds of "Lost device connection ... forcibly closed": the app being
+  brought to the front (it reconnects at once) and the app process being ended.
+
+**What build 11 changes.**
+
+1. **Second keeper: an inaudible sound** (Settings, Background synchronization, "Also play silence", on by default; "audio" was already in
+   `UIBackgroundModes`). iOS treats an app that plays sound like a music player: it is closed last when memory runs low. It is mixed with
+   other apps' sound, so music, calls and videos are not interrupted. It costs a little battery. The status line says `Silent sound: playing`.
+2. **Visible log lines.** The core keeps only warnings unless "Enable debug logging" is on, so lines that matter now use warning level
+   (`Log.note`) and are also written to the phone's system log in clear text (subsystem `com.jason.phototrain`). They appear in Settings,
+   Support, View log messages: scene changes, `Started; the app is in the background / in front; free memory ...`, memory warnings, photo
+   library changes, the one line per photo run, silent-sound start/stop/interruption, and `Sync is off because ...` / `Sync is allowed ...`
+   whenever the network rules change their mind.
+3. **"The app was not running from ... until ..."** is shown at the next start (and on the Background screen) when the gap since the last
+   sign of life is more than 3 minutes. Signs of life are written only when something happens (scene change, photo run, memory warning, and
+   the app's existing 50 second measurement timer, at most every 5 minutes): no new timer.
+4. **The network rules are now a tested pure file** (`Sushitrain/KeepAliveRules.swift`, CI self-test step `keepalive`). Behaviour is the same
+   as before: the sync is off in Low Power Mode (if that switch is on), when the network is not known, on mobile data, on a metered
+   (expensive) network and when Low Data Mode is on for the network. The shipped settings are: mobile data blocked, metered blocked.
+5. **The two Shortcuts actions "Back-up new photos" and "Synchronize for a while" may run while the phone is locked**
+   (`authenticationPolicy = .alwaysAllowed`), so a Shortcuts automation can use them with the screen off.
+6. A hint under the switch: do not swipe the app away in the app switcher.
+
+**Revival after a force-quit or any other end: a Shortcuts automation (create it on the iPhone yourself; the app cannot).**
+Shortcuts runs the app's actions even when the app is not running (it starts the app in the background), also after a force-quit,
+because you asked for it by creating the automation.
+
+1. Shortcuts app, tab *Automation*, **+**, choose **App**. Pick **Camera**, tick **Is Closed** (untick *Is Opened*), choose **Run Immediately**,
+   *Next*, *New Blank Automation*.
+2. *Add Action*, search **PhotoTrain**, choose **Back-up new photos**. Add a second action: **Synchronize for a while**, set the time to
+   **15** seconds (the most the action allows). Turn *Notify When Run* off. *Done*.
+3. Optional second automation, trigger **Charger**, **Is Connected**, *Run Immediately*, the same two actions (catches up after a night).
+4. Optional third automation, trigger **Time of Day** 03:00, *Daily*, *Run Immediately*, action **Synchronize for a while** (15 s).
+
+The network rules of the app still apply inside these runs (mobile data, metered networks and Low Data Mode stay blocked).
+
+**What iOS cannot do (honest list).** It cannot restart a force-quit app by itself. It cannot be told to start the app when a photo is
+taken (only the Camera-closed automation above comes close, and it only sees photos taken with the Camera app; a screenshot or a photo
+saved by another app is picked up the next time the app runs). The silent sound and the location session make it unlikely that iOS ends
+the app, but they cannot make it impossible: under very high memory pressure iOS can still end any background app.
+
+**Never on a hotspot: the honest answer.** iOS marks the Personal Hotspot of an *iPhone* as "expensive", and the setting "On metered
+networks" blocks it. An *Android* hotspot (for example a Samsung S10) is not marked by iOS: the app sees normal Wi-Fi. The only
+dependable block is **Low Data Mode for that Wi-Fi network** (iPhone Settings, Wi-Fi, the (i) next to the hotspot's name, *Low Data Mode*
+on, done once when the iPhone first joins it): the app then sees `constrained` and logs `Sync is off because Low Data Mode is on for this
+network`. Not built, because it cannot be done reliably: guessing a hotspot from its address range (an Android hotspot often uses
+192.168.43.x but not always), and allowing only named home networks (reading the Wi-Fi name needs an entitlement a free Apple ID does not
+have). Syncing only when the PC is on the same local network would block every hotspot, but it also blocks every public Wi-Fi.
+
+
 ## Self-test in the build
 
 There are two fast self-tests before the long steps. The first is `albumnaming`, the second `photochange` (see below).
@@ -243,6 +305,12 @@ plays a whole story with the same planning calls the back-up makes (first pass, 
 same file name, a renamed album, a crash in the middle of a file, a restart, "Re-copy all photos"). A failed check prints a line
 starting with `ERROR:` and stops the build in seconds. To run it on a Mac:
 `swiftc -swift-version 6 -parse-as-library -o /tmp/selftest Sushitrain/AlbumFolderNaming.swift tools/albumnaming_selftest/AlbumNamingSelfTest.swift && /tmp/selftest`.
+
+The step `keepalive` does the same for `Sushitrain/KeepAliveRules.swift` with `tools/keepalive_selftest/KeepAliveSelfTest.swift`: the network
+rules (plain Wi-Fi allowed; mobile data, metered, Low Data Mode, Low Power Mode and an unknown network blocked; every switch really
+switches; a device without a SIM; the order of the reasons; the Android-hotspot limit) and the sign-of-life note (durations, the gap
+message, the stored marks with their spacing, in a throw-away preference suite). To run it on a Mac:
+`swiftc -swift-version 6 -parse-as-library -o /tmp/selftest3 Sushitrain/KeepAliveRules.swift tools/keepalive_selftest/KeepAliveSelfTest.swift && /tmp/selftest3`.
 
 The step `photochange` does the same for `Sushitrain/PhotoChangePlan.swift` (the fast-path decision) with
 `tools/photochange_selftest/PhotoChangeSelfTest.swift`: a new photo alone, a new photo plus an update of the same photo, an update of

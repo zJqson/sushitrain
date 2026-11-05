@@ -8,6 +8,7 @@ import SwiftUI
 import BackgroundTasks
 import Combine
 import AppIntents
+import os
 
 @main
 struct SushitrainApp: App {
@@ -176,7 +177,13 @@ struct SushitrainApp: App {
 	}
 
 	private func onReceiveMemoryWarning() {
-		Log.info("Received memory pressure warning")
+		// Fork: a warning level line, because this is what the app wants to know when iOS later ends it (see README_FORK.md)
+		#if os(iOS)
+			Log.note("Received memory pressure warning; free memory the app may still use: \(os_proc_available_memory() / 1_000_000) MB")
+			AliveStore.markAlive("memory warning")
+		#else
+			Log.info("Received memory pressure warning")
+		#endif
 		self.appState.reduceMemoryUsage()
 	}
 

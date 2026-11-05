@@ -11,6 +11,7 @@ import WebKit
 import CoreTransferable
 import SwiftUI
 import Combine
+import os
 
 extension SushitrainListOfStrings {
 	public func asArray() -> [String] {
@@ -812,6 +813,9 @@ extension SushitrainPeer: @unchecked @retroactive Sendable {}
 extension SushitrainArchive: @unchecked @retroactive Sendable {}
 extension SushitrainMeasurement: @unchecked @retroactive Sendable {}
 
+/// Fork: where `Log.note` also writes, so the line shows in the phone's system log (live over USB, or later) and not only in the app.
+private let noteLogger = Logger(subsystem: "com.jason.phototrain", category: "note")
+
 final class Log {
 	static func info(_ message: String) {
 		SushitrainLogInfo(message)
@@ -819,6 +823,13 @@ final class Log {
 
 	static func warn(_ message: String) {
 		SushitrainLogWarn(message)
+	}
+
+	/// Fork: a line that must be visible. The core keeps only warnings and errors unless "Enable debug logging" is on, so this writes at
+	/// warning level (it shows in Settings, Support, View log messages) and also into the phone's system log with the text public.
+	static func note(_ message: String) {
+		SushitrainLogWarn(message)
+		noteLogger.notice("\(message, privacy: .public)")
 	}
 }
 
