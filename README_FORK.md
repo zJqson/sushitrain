@@ -333,6 +333,57 @@ network`. Not built, because it cannot be done reliably: guessing a hotspot from
 192.168.43.x but not always), and allowing only named home networks (reading the Wi-Fi name needs an entitlement a free Apple ID does not
 have). Syncing only when the PC is on the same local network would block every hotspot, but it also blocks every public Wi-Fi.
 
+## Manual transfers on a hotspot: the per-device exception (build 16 and later)
+
+**What it is.** The rule "never on mobile data, never on a metered or Low Data Mode network" stays exactly as it was for the photo
+back-up. New: for ONE device the user can switch on **"Allow on mobile data and hotspot (manual transfers only)"** (Devices, tap the
+device, tab General, section *Mobile data and hotspot*). It is **off for every device**, so an existing install behaves as build 15.
+The use case: the PC runs two Syncthing devices, the MAIN one that receives the photo back-up and a second one ("Drop") that shares only a
+folder `drop` for files, folders and zips that Jason sends by hand. The Drop device gets the switch; the main device never does.
+
+**How it works.** The app already stops Syncthing from talking to a device by pausing that device (`setDevicesPaused`, one call for all
+devices). `AppState.updateDeviceSuspension()` now decides device by device (`peersAllowedByNetworkRules`) with the pure rule
+`ConnectivityRules.blockReason(flags:settings:device:)` in `KeepAliveRules.swift`. For a device with the switch on, mobile data, a metered
+network and a Low Data Mode Wi-Fi no longer pause it. Everything else stays for ALL devices: an unknown network (the whole start-up, because
+the network monitor has not reported yet: every device is paused BEFORE the core starts, as before), Low Power Mode when that limit is on,
+and a device the user paused. The two-argument `blockReason(flags:settings:)` of build 15 still exists and is the rule for a device without the
+switch; the self-test compares it with a word-for-word copy of build 15's rule for all 512 inputs.
+
+**Fail-safe (the photos can never leave on a restricted network).** The switch is ignored for every device that shares the photo back-up
+folder (`PhotoBackup.selectedFolderID`, every mode including "Every album", because the album folders are directories inside that one
+Syncthing folder) and for every device that shares a folder whose path is the same as, inside or around the back-up folder's path
+(`BackupFolderGuard`; paths are compared folder by folder, without upper/lower case, `.` and `..` resolved, `/private/var` = `/var`; a wrong
+guess can only make the rule stricter). For such a device the switch is greyed out with the reason (or, if it was set before, stays
+visible and says "the switch is ignored"), the device screen, the start screen (while the network is blocked) and the log say so, and the
+old rule applies. The check is made again when a
+folder is shared with a device or unshared (`AppState.sharingChanged()`, six places in the screens), when another back-up folder is
+chosen, and when a folder is moved to another place; also at every start, network change, Low Power Mode change and settings change.
+
+**Where the state is shown (no new screen).** (1) The start screen's network label (`NetworkStatusView`): without any switch it says what it
+always said, plus one grey line *"Paused, because Low Data Mode is on for this network."*; with a switch on and a blocked network it shows
+*"Photo back-up and other devices: paused, because Low Data Mode is on for this network."* and *"Drop: allowed on this network (manual
+transfers)."* (2) The device screen shows the line of that device under the switch. (3) The log (Settings, Support, View log messages) gets
+`Manual-transfer exception: ...` lines whenever the text changes, and `Manual-transfer switch for NAME is now on/off.` when it is flipped.
+
+**Where the switch is kept.** `AppUserSettings.devicesAllowedOnRestrictedNetworks`, a preference (`@AppStorage`, the list of device IDs;
+empty by default), like `userPausedDevices`. It is known before the core starts. No timer, no polling: every decision is an event
+(start, network path change, Low Power Mode change, a setting, the switch, a share change).
+
+**What the core does on a restricted network when only the Drop device is unpaused** (read in Syncthing's own source at the commit the core
+uses, `lib/connections/service.go` and `lib/model/model.go`): the dial loop skips every paused device before it looks an address up
+(`if deviceCfg.Paused { continue }` comes before `resolveDialTargets` / the discovery lookup), so on a hotspot the core dials and looks up
+only the Drop device; a connection that comes in from a paused device is closed in `connectionCheckEarly` (`errDevicePaused`, after the TLS
+handshake told who it is); pausing a device closes its connection; unpausing one makes the dial loop run at once. What is NOT per device and
+therefore the same as in build 15: the core's own listener, its announcements to the global discovery servers, relay and NAT/STUN
+keep-alives (the app's own switches in Settings, sections *Discovery* and *Network traversal*). No byte counts were measured (no phone, no hotspot).
+
+**Not proven.** A real hotspot, a real Drop device on the phone, and the behaviour of the core on mobile data with only the Drop device
+unpaused were not tried; the Swift code was written without a compiler and is checked by the CI (self-test step `keepalive`) and by a Python
+model (`D:\HelperWork\devnet_20261105\model`, 20 planted mistakes all caught). Known limits: a folder share that arrives without any screen of
+the app being used (an *introducer* device, keep that switch off) is noticed at the next start, network change or setting change, not at
+once, because the core's events do not reach the app in the background and a timer is not allowed; two decisions that run at the same moment
+(the same race as in build 15) each use the state they saw.
+
 ## Self-test in the build
 
 There are two fast self-tests before the long steps. The first is `albumnaming`, the second `photochange` (see below).
@@ -348,7 +399,11 @@ starting with `ERROR:` and stops the build in seconds. To run it on a Mac:
 
 The step `keepalive` does the same for `Sushitrain/KeepAliveRules.swift` with `tools/keepalive_selftest/KeepAliveSelfTest.swift`: the network
 rules (plain Wi-Fi allowed; mobile data, metered, Low Data Mode, Low Power Mode and an unknown network blocked; every switch really
-switches; a device without a SIM; the order of the reasons; the Android-hotspot limit) and the sign-of-life note (durations, the gap
+switches; a device without a SIM; the order of the reasons; the Android-hotspot limit), the per-device exception for manual transfers
+(a table of all 512 combinations of network situation and settings, compared with a word-for-word copy of build 15's rule: a device
+without the switch must get the same answer in every one; a device with the switch is stopped only by an unknown network and Low Power
+Mode; the switch is ignored for a device that shares the photo back-up folder; the plain-words lines; which devices share the back-up
+folder, with nested, surrounding, same-name, upper/lower-case and `/private/var` paths) and the sign-of-life note (durations, the gap
 message, the stored marks with their spacing, in a throw-away preference suite). To run it on a Mac:
 `swiftc -swift-version 6 -parse-as-library -o /tmp/selftest3 Sushitrain/KeepAliveRules.swift tools/keepalive_selftest/KeepAliveSelfTest.swift && /tmp/selftest3`.
 

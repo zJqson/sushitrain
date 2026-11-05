@@ -498,6 +498,8 @@ private struct ExternalFolderSectionView: View {
 							try BookmarkManager.shared.saveBookmark(folderID: self.folder.folderID, url: url)
 							try folder.setPath(url.path(percentEncoded: false))
 							try? self.folder.setPaused(false)
+							// Fork: a folder that was moved may now lie in or around the photo back-up folder
+							appState.sharingChanged()
 						}
 						catch {
 							self.errorText = String(localized: "Could not re-link folder: \(error.localizedDescription)")
@@ -605,6 +607,8 @@ struct ExternalFolderInaccessibleView: View {
 							try BookmarkManager.shared.saveBookmark(folderID: self.folder.folderID, url: url)
 							try folder.setPath(url.path(percentEncoded: false))
 							try? self.folder.setPaused(false)
+							// Fork: a folder that was moved may now lie in or around the photo back-up folder
+							appState.sharingChanged()
 						}
 						catch {
 							self.errorText = String(localized: "Could not re-link folder: \(error.localizedDescription)")

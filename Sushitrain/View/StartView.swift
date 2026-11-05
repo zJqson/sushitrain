@@ -200,6 +200,10 @@ private struct NetworkStatusView: View {
 				if appState.networkExceptionLines.isEmpty {
 					Label("Network connectivity temporarily disabled", systemImage: "antenna.radiowaves.left.and.right")
 						.foregroundStyle(.orange)
+					// Fork: say why, in the same words as the log line (for example "Low Data Mode is on for this network")
+					if let why = appState.connectivityBlockReason {
+						Text("Paused, because \(why).").font(.footnote).foregroundStyle(.secondary)
+					}
 				}
 				else {
 					// Fork: a device is allowed on this kind of network for manual transfers: say in plain words what is paused and what

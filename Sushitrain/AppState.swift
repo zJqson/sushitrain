@@ -993,6 +993,10 @@ struct SyncState: Equatable {
 		var deviceLines: [String] = []
 		var lineOfDevice: [String: String] = [:]
 		for peerID in peerIDs {
+			// A device that the user paused stays paused whatever the network is, and has nothing to say about the network
+			if userPaused.contains(peerID) {
+				continue
+			}
 			let policy = DeviceNetworkPolicy(
 				allowsRestrictedNetworks: switchedOn.contains(peerID),
 				sharesBackupFolder: backupDevices.contains(peerID))
@@ -1002,9 +1006,6 @@ struct SyncState: Equatable {
 					deviceLines.append(line)
 					lineOfDevice[peerID] = line
 				}
-			}
-			if userPaused.contains(peerID) {
-				continue
 			}
 			if ConnectivityRules.blockReason(flags: flags, settings: settings, device: policy) == nil {
 				allowed.append(peerID)
@@ -1018,21 +1019,26 @@ struct SyncState: Equatable {
 		if lineOfDevice != self.deviceNetworkLines {
 			self.deviceNetworkLines = lineOfDevice
 		}
-		self.noteExceptionLines(deviceLines)
+		self.noteExceptionLines(deviceLines, anySwitchOn: !switchedOn.isEmpty)
 		return allowed
 	}
 
 	// Fork: say in the log (warning level, so it shows) what the exception for manual transfers does; only when that text changes
 	@ObservationIgnored private var lastExceptionNote: String = ""
 
-	private func noteExceptionLines(_ lines: [String]) {
+	private func noteExceptionLines(_ lines: [String], anySwitchOn: Bool) {
 		let note = lines.joined(separator: " ")
 		if note == self.lastExceptionNote {
 			return
 		}
 		self.lastExceptionNote = note
 		if lines.isEmpty {
-			Log.note("No device uses the exception for manual transfers any more.")
+			if anySwitchOn {
+				Log.note("Manual-transfer exception: nothing to report on this network.")
+			}
+			else {
+				Log.note("Manual-transfer exception: no device has the switch on.")
+			}
 		}
 		for line in lines {
 			Log.note("Manual-transfer exception: \(line)")
