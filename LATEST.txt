@@ -1,13 +1,11 @@
-run 11: FAILURE at step 'keepalive' - cf9ba4e - 2026-11-05T01:54:06Z
+run 12: SUCCESS - 1378f3b - 2026-11-05T02:08:09Z
 
-Run:      https://github.com/zJqson/sushitrain/actions/runs/41951575109 (attempt 1)
-Commit:   cf9ba4eac8aa2dce65cb12fbb504e9c6982bd3bb
-Status:   FAILURE
-Steps:    checkout=success xcode=success albumnaming=success photochange=success keepalive=failure platform=skipped go=skipped identity=skipped entitlements=skipped core=skipped ios=skipped package=skipped check_ipa=skipped release=skipped
-Release:  (none)
-IPA:      (none)
-Log:      run-11.log (18 lines)
+Run:      https://github.com/zJqson/sushitrain/actions/runs/41952093040 (attempt 1)
+Commit:   1378f3b5ac523429658cedc736b6b264fd01a0bd
+Status:   SUCCESS
+Steps:    checkout=success xcode=success albumnaming=success photochange=success keepalive=success platform=success go=success identity=success entitlements=success core=success ios=success package=success check_ipa=success release=success
+Release:  https://github.com/zJqson/sushitrain/releases/download/build-12/PhotoTrain.ipa
+IPA:      PhotoTrain.ipa 12592989 bytes, sha256 47e8c2f738435d9f144e304beb7ed78b239b2854885958f01fbf9ea52967b3b3
+Log:      run-12.log (1308 lines)
 
-First 2 error lines of the build output (number = line in run-11.log):
-    17: error: link command failed with exit code 1 (use -v to see invocation)
-    18: clang: error: no such file or directory: 'n'
+No error lines found in the build output.
