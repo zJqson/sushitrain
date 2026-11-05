@@ -178,6 +178,9 @@ enum PhotoBackupProgress {
 	// one folder with the album's name inside the destination folder (see AlbumFolderNaming.swift and README_FORK.md).
 	static nonisolated let everyAlbumIdentifier = "_PHOTOTRAIN_EVERY_ALBUM"
 
+	// Fork: the preference key of the note "this app paused the Syncthing folder" (the folder id is stored under it)
+	static nonisolated let pausedByAppKey = "photoBackupFolderPausedByApp"
+
 	// These settings are prefixed 'photoSync' because that is what the feature used to be called
 	@AppStorage("photoSyncSelectedAlbumID") var selectedAlbumID: String = ""
 	@AppStorage("photoSyncFolderID") var selectedFolderID: String = ""
@@ -383,6 +386,21 @@ enum PhotoBackupProgress {
 								self.lastSuccessfulChangeToken = changeToken
 							}
 						}
+						// Fork fix: a folder that an earlier run paused and could not put back (iOS ended the app in the middle of that run)
+						// stays paused for good when every later run ends here. Put it back now (see PhotoChangePlanner).
+						if PhotoChangePlanner.shouldPutFolderBackWithoutWork(
+							noteSaysAppPausedIt: UserDefaults.standard.string(forKey: PhotoBackup.pausedByAppKey) == selectedFolderID,
+							isPausedNow: folder.isPaused())
+						{
+							do {
+								try folder.setPaused(false)
+								UserDefaults.standard.removeObject(forKey: PhotoBackup.pausedByAppKey)
+								Log.warn("Photo back-up: an earlier run left the folder paused; it is put back")
+							}
+							catch {
+								Log.warn("Photo back-up: could not put the paused folder back: \(error.localizedDescription). The next run tries again.")
+							}
+						}
 						return
 
 					case .only(let changedIDs):
@@ -422,7 +440,7 @@ enum PhotoBackupProgress {
 			// Fork: the pause is saved in Syncthing's configuration. When iOS ends the app in the middle of a run, the folder stays
 			// paused, and the next run would think "it was paused before" and keep it paused for good. So the app notes in its
 			// preferences that IT paused the folder, and removes the note when it has put the folder back.
-			let pausedByAppKey = "photoBackupFolderPausedByApp"
+			let pausedByAppKey = PhotoBackup.pausedByAppKey
 			let leftPausedByApp = UserDefaults.standard.string(forKey: pausedByAppKey) == selectedFolderID
 			let folderWasPaused = folder.isPaused() && !leftPausedByApp
 			if leftPausedByApp {

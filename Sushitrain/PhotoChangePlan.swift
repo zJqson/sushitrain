@@ -157,6 +157,12 @@ enum PhotoChangePlanner {
 		return appPausedIt && putBackWorked
 	}
 
+	/// The shortcut "nothing to do" must still put back a folder that an earlier run (ended by iOS in the middle of its work) left paused: that is
+	/// when the note says the app paused it and it is paused now. A folder the user paused (no note) is never touched.
+	static func shouldPutFolderBackWithoutWork(noteSaysAppPausedIt: Bool, isPausedNow: Bool) -> Bool {
+		return noteSaysAppPausedIt && isPausedNow
+	}
+
 	/// The end of a run in words, for the log.
 	static func describeOutcome(_ outcome: PhotoRunOutcome) -> String {
 		switch outcome {

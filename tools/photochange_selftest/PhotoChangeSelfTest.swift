@@ -233,6 +233,12 @@ struct PhotoChangeSelfTest {
 		expectTrue(!PhotoChangePlanner.mayRemovePausedNote(appPausedIt: false, putBackWorked: true), "no note to remove when the user had paused the folder")
 		expectTrue(!PhotoChangePlanner.mayRemovePausedNote(appPausedIt: false, putBackWorked: false), "no note to remove when the user had paused it and nothing worked")
 
+		// ---- 10d. The shortcut "nothing to do" and a folder an earlier run left paused ------------------------------------------------
+		expectTrue(PhotoChangePlanner.shouldPutFolderBackWithoutWork(noteSaysAppPausedIt: true, isPausedNow: true), "a folder an earlier run left paused is put back")
+		expectTrue(!PhotoChangePlanner.shouldPutFolderBackWithoutWork(noteSaysAppPausedIt: true, isPausedNow: false), "nothing to put back when the folder runs")
+		expectTrue(!PhotoChangePlanner.shouldPutFolderBackWithoutWork(noteSaysAppPausedIt: false, isPausedNow: true), "a folder the user paused is left alone")
+		expectTrue(!PhotoChangePlanner.shouldPutFolderBackWithoutWork(noteSaysAppPausedIt: false, isPausedNow: false), "nothing to do")
+
 		// ---- 11. The log line -----------------------------------------------------------------------------------------------------
 		expectEqual(PhotoChangePlanner.describe(.nothing), "nothing to do", "describe nothing")
 		expectEqual(PhotoChangePlanner.describe(.only(["A"])), "fast (1 photo)", "describe one photo")
