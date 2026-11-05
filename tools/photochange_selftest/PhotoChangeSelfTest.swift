@@ -227,6 +227,12 @@ struct PhotoChangeSelfTest {
 		expectEqual(PhotoChangePlanner.describeOutcome(.cancelled), "cancelled", "describe cancelled")
 		expectEqual(PhotoChangePlanner.describeOutcome(.failed), "failed", "describe failed")
 
+		// ---- 10c. The note "this app paused the folder" (it must stay when the folder could not be put back) ----------------------------
+		expectTrue(PhotoChangePlanner.mayRemovePausedNote(appPausedIt: true, putBackWorked: true), "the note goes when the app put the folder back")
+		expectTrue(!PhotoChangePlanner.mayRemovePausedNote(appPausedIt: true, putBackWorked: false), "the note stays when putting the folder back failed")
+		expectTrue(!PhotoChangePlanner.mayRemovePausedNote(appPausedIt: false, putBackWorked: true), "no note to remove when the user had paused the folder")
+		expectTrue(!PhotoChangePlanner.mayRemovePausedNote(appPausedIt: false, putBackWorked: false), "no note to remove when the user had paused it and nothing worked")
+
 		// ---- 11. The log line -----------------------------------------------------------------------------------------------------
 		expectEqual(PhotoChangePlanner.describe(.nothing), "nothing to do", "describe nothing")
 		expectEqual(PhotoChangePlanner.describe(.only(["A"])), "fast (1 photo)", "describe one photo")

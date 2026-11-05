@@ -149,6 +149,14 @@ enum PhotoChangePlanner {
 		}
 	}
 
+	/// The folder is paused while a run saves files (the pause is saved in Syncthing's configuration). The app writes a note "I paused it" so
+	/// that a run after a crash can tell the app's pause from the user's own. May that note be removed at the end of a run? Only when the app
+	/// paused the folder AND putting it back worked. When putting it back failed the note must stay, or the next run would take the pause for
+	/// the user's own and keep the folder paused for good.
+	static func mayRemovePausedNote(appPausedIt: Bool, putBackWorked: Bool) -> Bool {
+		return appPausedIt && putBackWorked
+	}
+
 	/// The end of a run in words, for the log.
 	static func describeOutcome(_ outcome: PhotoRunOutcome) -> String {
 		switch outcome {

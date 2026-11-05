@@ -433,8 +433,18 @@ enum PhotoBackupProgress {
 			}
 			try folder.setPaused(true)
 			defer {
-				try? folder.setPaused(folderWasPaused)
-				if !folderWasPaused {
+				// Fork fix: the note "this app paused the folder" is removed only when the folder really was put back. If putting it back
+				// fails (Syncthing's configuration could not be saved) the note stays; without it the next run would take the pause for the
+				// user's own and keep the folder paused for good (see PhotoChangePlanner.mayRemovePausedNote).
+				var putBackWorked = true
+				do {
+					try folder.setPaused(folderWasPaused)
+				}
+				catch {
+					putBackWorked = false
+					Log.warn("Photo back-up: could not put the folder back as it was: \(error.localizedDescription). The next run tries again.")
+				}
+				if PhotoChangePlanner.mayRemovePausedNote(appPausedIt: !folderWasPaused, putBackWorked: putBackWorked) {
 					UserDefaults.standard.removeObject(forKey: pausedByAppKey)
 				}
 			}
