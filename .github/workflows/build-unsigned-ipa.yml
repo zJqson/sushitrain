@@ -133,7 +133,8 @@ jobs:
             echo "=== keep-alive rules self-test ($(date -u +%H:%M:%SZ)) ==="
             T="$RUNNER_TEMP/keepalive-selftest"
             mkdir -p "$T"
-            xcrun swiftc -swift-version 6 -parse-as-library -o "$T/selftest" \n              Sushitrain/KeepAliveRules.swift tools/keepalive_selftest/KeepAliveSelfTest.swift
+            xcrun swiftc -swift-version 6 -parse-as-library -o "$T/selftest" \
+              Sushitrain/KeepAliveRules.swift tools/keepalive_selftest/KeepAliveSelfTest.swift
             "$T/selftest"
           } 2>&1 | tee -a "$BUILD_LOG"
 
