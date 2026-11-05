@@ -174,7 +174,11 @@ struct PhotoBackupSettingsView: View {
 					}
 					.pickerStyle(.menu)
 					.disabled(photoBackup.isBackingUp || photoBackup.selectedAlbumID.isEmpty)
-					.onChange(of: photoBackup.selectedFolderID) { _, _ in photoBackup.resetLastSuccessfulChangeToken() }
+					.onChange(of: photoBackup.selectedFolderID) { _, _ in
+						photoBackup.resetLastSuccessfulChangeToken()
+						// Fork: which devices may use a restricted network depends on the back-up folder
+						appState.sharingChanged()
+					}
 				}
 			} header: {
 				Text("Copy photos")

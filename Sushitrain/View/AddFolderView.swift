@@ -361,6 +361,8 @@ struct AddFolderView: View {
 				for devID in self.adding.sharedWithDevices {
 					try folder.share(withDevice: devID, toggle: true, encryptionPassword: "")
 				}
+				// Fork: which devices may use a restricted network depends on the folders they get
+				appState.sharingChanged()
 				self.shown = false
 			}
 			else {

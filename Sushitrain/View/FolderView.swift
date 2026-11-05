@@ -70,6 +70,8 @@ struct ShareFolderWithDeviceDetailsView: View {
 						try folder.share(
 							withDevice: self.deviceID, toggle: true,
 							encryptionPassword: newPassword)
+						// Fork: which devices may use a restricted network depends on the folders they get
+						appState.sharingChanged()
 						dismiss()
 					}
 					catch let error {
@@ -874,6 +876,8 @@ struct ShareWithDeviceToggleView: View {
 		catch let error {
 			Log.warn("Error sharing folder: " + error.localizedDescription)
 		}
+		// Fork: which devices may use a restricted network depends on the folders they get
+		appState.sharingChanged()
 		Task {
 			self.update()
 		}

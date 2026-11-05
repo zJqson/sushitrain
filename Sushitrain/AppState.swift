@@ -103,6 +103,10 @@ class SushitrainDelegate: NSObject {
 	@AppStorage("automaticallyShowWebpages") var automaticallyShowWebpages: Bool = true
 	@AppStorage("migratedToV2At") var migratedToV2At: Double = 0.0
 	@AppStorage("userPausedDevices") var userPausedDevices = Set<String>()
+	// Fork: the devices for which the user switched on "Allow on mobile data and hotspot (manual transfers only)" (device IDs; none by
+	// default). The switch lifts only the mobile data / metered / Low Data Mode rules and is ignored for a device that shares the photo
+	// back-up folder (see DeviceNetworkPolicy and BackupFolderGuard in KeepAliveRules.swift).
+	@AppStorage("devicesAllowedOnRestrictedNetworks") var devicesAllowedOnRestrictedNetworks = Set<String>()
 	@AppStorage("ignoreLongTimeNoSeeDevices") var ignoreLongTimeNoSeeDevices = Set<String>()
 	@AppStorage("ignoreDiscoveredDevices") var ignoreDiscoveredDevices = Set<String>()
 
@@ -231,6 +235,11 @@ struct SyncState: Equatable {
 	fileprivate(set) var lastChanges: [SushitrainChange] = []
 	fileprivate(set) var currentNetworkPath: NWPath? = nil
 	private(set) var isLowPowerModeEnabled = ProcessInfo.processInfo.isLowPowerModeEnabled
+	// Fork: lines in plain words about the per-device exception for manual transfers (what is paused, what is allowed on this network).
+	// Empty while no device has the switch on, so the start screen then shows what it always showed. Updated by every decision.
+	private(set) var networkExceptionLines: [String] = []
+	// Fork: the same for one device's screen (device ID -> line)
+	private(set) var deviceNetworkLines: [String: String] = [:]
 
 	private let documentsDirectory: URL
 	private let configDirectory: URL
@@ -836,6 +845,20 @@ struct SyncState: Equatable {
 		}
 	}
 
+	// Fork: the switch "Allow on mobile data and hotspot (manual transfers only)" of one device (off for every device by default). It is
+	// kept per device ID in the app's preferences, so it survives restarts and is known before the core starts.
+	func isDeviceAllowedOnRestrictedNetworks(_ device: SushitrainPeer) -> Bool {
+		return self.userSettings.devicesAllowedOnRestrictedNetworks.contains(device.id)
+	}
+
+	func setDevice(_ device: SushitrainPeer, allowedOnRestrictedNetworks allowed: Bool) {
+		self.userSettings.devicesAllowedOnRestrictedNetworks.toggle(device.id, allowed)
+		Log.note("Manual-transfer switch for \(device.displayName) is now \(allowed ? "on" : "off").")
+		Task {
+			await self.updateDeviceSuspension()
+		}
+	}
+
 	nonisolated func peers() async -> [SushitrainPeer] {
 		let client = self.client
 		let peerIDs = client.peers()!.asArray()
@@ -896,20 +919,28 @@ struct SyncState: Equatable {
 
 	// Fork: why the sync is off right now (nil = it may run). The rules are in KeepAliveRules.swift (ConnectivityRules, covered by the CI
 	// self-test); the behaviour is the same as before: Low Power Mode, an unknown network, mobile data, a metered network, Low Data Mode.
+	// This is the rule for a device WITHOUT the manual-transfer switch (the per-device rule is peersAllowedByNetworkRules below).
 	var connectivityBlockReason: String? {
-		let settings = ConnectivitySettings(
+		return ConnectivityRules.blockReason(flags: self.connectivityFlags, settings: self.connectivitySettings)
+	}
+
+	// Fork: the settings and the network flags that the rules in KeepAliveRules.swift work with (the same for every device)
+	private var connectivitySettings: ConnectivitySettings {
+		return ConnectivitySettings(
 			blockOnCellular: userSettings.disableDevicesOnCellular,
 			blockOnMetered: userSettings.disableDevicesOnMetered,
 			blockInLowPowerMode: userSettings.disableDevicesInLowPowerMode)
+	}
+
+	private var connectivityFlags: ConnectivityFlags {
 		let path = self.currentNetworkPath
-		let flags = ConnectivityFlags(
+		return ConnectivityFlags(
 			pathKnown: path != nil,
 			usesCellular: path?.usesInterfaceType(.cellular) ?? false,
 			isExpensive: path?.isExpensive ?? false,
 			isConstrained: path?.isConstrained ?? false,
 			lowPowerMode: self.isLowPowerModeEnabled,
 			deviceHasCellular: deviceHasCellularCapability())
-		return ConnectivityRules.blockReason(flags: flags, settings: settings)
 	}
 
 	// Fork: say in the log (warning level, so it shows) when the network rules switch the sync off or on again
@@ -929,6 +960,93 @@ struct SyncState: Equatable {
 		}
 	}
 
+	// Fork: the devices that share the photo back-up folder, or a folder in or around it. The exception for manual transfers never applies
+	// to them (BackupFolderGuard in KeepAliveRules.swift). Nobody shares it while no back-up folder is chosen.
+	func devicesSharingBackupFolder() -> Set<String> {
+		let backupFolderID = self.photoBackup.selectedFolderID
+		if backupFolderID.isEmpty {
+			return []
+		}
+		var folders: [FolderShareInfo] = []
+		let folderIDs = self.client.folders()?.asArray() ?? []
+		for folderID in folderIDs {
+			if let folder = self.client.folder(withID: folderID) {
+				let sharedWith = Set(folder.sharedWithDeviceIDs()?.asArray() ?? [])
+				folders.append(FolderShareInfo(id: folderID, path: folder.path(), sharedWith: sharedWith))
+			}
+		}
+		return BackupFolderGuard.devicesSharingBackup(backupFolderID: backupFolderID, folders: folders)
+	}
+
+	// Fork: the devices that may connect on this network, decided ONE BY ONE with ConnectivityRules.blockReason and the device's own
+	// policy; the devices the user paused are left out. A device with the manual-transfer switch on stays connected where the others
+	// are paused (unless it shares the photo back-up folder). While no device has the switch on, the answer is the same for every device
+	// and equals the old global rule. Also keeps the plain-words lines of the screens up to date and logs a change.
+	func peersAllowedByNetworkRules(_ peerIDs: [String]) -> [String] {
+		let flags = self.connectivityFlags
+		let settings = self.connectivitySettings
+		let userPaused = self.userSettings.userPausedDevices
+		let switchedOn = self.userSettings.devicesAllowedOnRestrictedNetworks
+		// Nothing to look up while no device has the switch on (the usual case)
+		let backupDevices = switchedOn.isEmpty ? Set<String>() : self.devicesSharingBackupFolder()
+		var allowed: [String] = []
+		var deviceLines: [String] = []
+		var lineOfDevice: [String: String] = [:]
+		for peerID in peerIDs {
+			let policy = DeviceNetworkPolicy(
+				allowsRestrictedNetworks: switchedOn.contains(peerID),
+				sharesBackupFolder: backupDevices.contains(peerID))
+			if policy.allowsRestrictedNetworks {
+				let name = self.client.peer(withID: peerID)?.displayName ?? peerID
+				if let line = ConnectivityRules.deviceExceptionLine(name: name, flags: flags, settings: settings, device: policy) {
+					deviceLines.append(line)
+					lineOfDevice[peerID] = line
+				}
+			}
+			if userPaused.contains(peerID) {
+				continue
+			}
+			if ConnectivityRules.blockReason(flags: flags, settings: settings, device: policy) == nil {
+				allowed.append(peerID)
+			}
+		}
+		let statusLines = ConnectivityRules.statusLines(
+			globalReason: ConnectivityRules.blockReason(flags: flags, settings: settings), deviceLines: deviceLines)
+		if statusLines != self.networkExceptionLines {
+			self.networkExceptionLines = statusLines
+		}
+		if lineOfDevice != self.deviceNetworkLines {
+			self.deviceNetworkLines = lineOfDevice
+		}
+		self.noteExceptionLines(deviceLines)
+		return allowed
+	}
+
+	// Fork: say in the log (warning level, so it shows) what the exception for manual transfers does; only when that text changes
+	@ObservationIgnored private var lastExceptionNote: String = ""
+
+	private func noteExceptionLines(_ lines: [String]) {
+		let note = lines.joined(separator: " ")
+		if note == self.lastExceptionNote {
+			return
+		}
+		self.lastExceptionNote = note
+		if lines.isEmpty {
+			Log.note("No device uses the exception for manual transfers any more.")
+		}
+		for line in lines {
+			Log.note("Manual-transfer exception: \(line)")
+		}
+	}
+
+	// Fork: to call after a folder was shared with a device or unshared from it, or after another photo back-up folder was chosen:
+	// which devices may use a restricted network depends on that (devicesSharingBackupFolder)
+	nonisolated func sharingChanged() {
+		Task {
+			await self.updateDeviceSuspension()
+		}
+	}
+
 	nonisolated func updateDeviceSuspension() async {
 		guard await self.hasLoadedClient else { return }
 		await self.noteConnectivityDecision()
@@ -943,18 +1061,19 @@ struct SyncState: Equatable {
 				return
 			}
 
-			// Disable devies if the user wants to disable connectivity depending on the network connection type
-			if await self.shouldDisableConnectivity {
+			// Disable devices if the user wants to disable connectivity depending on the network connection type, and on macOS and when
+			// the app is in the foreground unpause any device that is not explicitly suspended by the user.
+			// Fork: this is decided PER DEVICE (peersAllowedByNetworkRules). A device that the user allowed on mobile data / hotspots
+			// (manual transfers) stays connected where the others are paused, unless it shares the photo back-up folder. While no device
+			// has that switch, the result is the old one: every device is paused while the network rules block, otherwise every device
+			// except the ones the user paused. Setting "all but the listed devices" with an EMPTY list pauses all devices.
+			if let peers = self.client.peers() {
+				let devicesEnabled = await self.peersAllowedByNetworkRules(peers.asArray())
+				try client.setDevicesPaused(SushitrainListOfStrings.from(devicesEnabled), pause: false)
+			}
+			else if await self.shouldDisableConnectivity {
 				// This pauses all devices ("pause: false" only applies to the supplied list of devices, the other devices are set to the opposite)
 				try client.setDevicesPaused(SushitrainListOfStrings.from(Array()), pause: false)
-				return
-			}
-
-			// On macOS and when the app is in the foreground, we unpause any device that is not explicitly suspended
-			// by the user
-			if let peers = self.client.peers() {
-				let devicesEnabled = Set(peers.asArray()).subtracting(await self.userSettings.userPausedDevices)
-				try client.setDevicesPaused(SushitrainListOfStrings.from(Array(devicesEnabled)), pause: false)
 			}
 		}
 		catch {

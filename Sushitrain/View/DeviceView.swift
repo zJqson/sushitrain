@@ -27,6 +27,8 @@ struct DeviceView: View {
 	@State private var showAddresses: Bool = false
 	@State private var showConfirmUnlink = false
 	@State private var editSharingWith: SushitrainFolder? = nil
+	// Fork: true when this device shares the photo back-up folder (then the manual-transfer switch cannot be used)
+	@State private var sharesBackupFolder: Bool = false
 
 	var body: some View {
 		VStack {
@@ -85,6 +87,7 @@ struct DeviceView: View {
 			!folder.isShared(withDeviceID: deviceID)
 		}
 		let lastAddress = client.getLastPeerAddress(self.device.deviceID())
+		let sharesBackupFolder = await self.appState.devicesSharingBackupFolder().contains(deviceID)
 
 		Task { @MainActor in
 			withAnimation {
@@ -92,6 +95,7 @@ struct DeviceView: View {
 				self.otherFolders = otherFolders
 			}
 			self.lastAddress = lastAddress
+			self.sharesBackupFolder = sharesBackupFolder
 		}
 	}
 
@@ -133,6 +137,33 @@ struct DeviceView: View {
 			Text("Device settings")
 		} footer: {
 			Text("If a device is not enabled, synchronization with this device is paused.")
+		}
+
+		// Fork: the exception for manual transfers. The app never syncs on mobile data or on a metered / Low Data Mode network (a
+		// hotspot); a device with this switch on is the one exception, for files the user sends by hand. It does not work for a
+		// device that shares the photo back-up folder: photos are never allowed on mobile data or a hotspot.
+		Section {
+			Toggle(
+				"Allow on mobile data and hotspot (manual transfers only)",
+				isOn: Binding(
+					get: { appState.isDeviceAllowedOnRestrictedNetworks(device) },
+					set: { allowed in appState.setDevice(device, allowedOnRestrictedNetworks: allowed) }
+				)
+			)
+			.disabled(self.sharesBackupFolder && !appState.isDeviceAllowedOnRestrictedNetworks(device))
+
+			if self.sharesBackupFolder {
+				Text("Not possible for this device: it receives your photo back-up, and photos never use mobile data or a hotspot.")
+					.foregroundStyle(.orange)
+			}
+
+			if let line = appState.deviceNetworkLines[device.deviceID()] {
+				Text(line).foregroundStyle(.secondary)
+			}
+		} header: {
+			Text("Mobile data and hotspot")
+		} footer: {
+			Text("For files you send yourself. Photos are never allowed on mobile data or a hotspot.")
 		}
 
 		Section {

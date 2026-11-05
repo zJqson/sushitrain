@@ -197,8 +197,24 @@ private struct NetworkStatusView: View {
 	var body: some View {
 		Group {
 			if appState.shouldDisableConnectivity {
-				Label("Network connectivity temporarily disabled", systemImage: "antenna.radiowaves.left.and.right")
+				if appState.networkExceptionLines.isEmpty {
+					Label("Network connectivity temporarily disabled", systemImage: "antenna.radiowaves.left.and.right")
+						.foregroundStyle(.orange)
+				}
+				else {
+					// Fork: a device is allowed on this kind of network for manual transfers: say in plain words what is paused and what
+					// is allowed (the lines come from ConnectivityRules.statusLines, see KeepAliveRules.swift)
+					Label {
+						VStack(alignment: .leading, spacing: 4) {
+							ForEach(appState.networkExceptionLines, id: \.self) { line in
+								Text(line)
+							}
+						}
+					} icon: {
+						Image(systemName: "antenna.radiowaves.left.and.right")
+					}
 					.foregroundStyle(.orange)
+				}
 			}
 			else if let path = appState.currentNetworkPath {
 				if path.status == .satisfied {

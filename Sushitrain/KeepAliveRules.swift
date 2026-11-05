@@ -10,7 +10,9 @@ import Foundation
 // in a few seconds, before the long build starts:
 //
 // 1. ConnectivityRules - the network rules of the sync ("Wi-Fi only, never mobile data, never a metered or Low Data Mode network"),
-//    decided from plain flags. AppState turns the NWPath into these flags.
+//    decided from plain flags. AppState turns the NWPath into these flags. A device that the user marked "Allow on mobile data and
+//    hotspot (manual transfers only)" is exempt from the mobile data / metered / Low Data Mode rules (DeviceNetworkPolicy), but never
+//    when it shares the photo back-up folder (BackupFolderGuard): photos never use a restricted network.
 // 2. AliveJournal / AliveStore - a note of "when did this app last show a sign of life", so that the next start can say "the app was not
 //    running from 18:00 to 18:15" (iOS ended it, or the phone was restarted). Written only when something happens (a scene change, a
 //    photo run, a memory warning, the existing 50 second measurement timer, at most every 5 minutes): there is no timer of its own.
@@ -41,7 +43,15 @@ struct ConnectivitySettings: Equatable, Sendable {
 enum ConnectivityRules {
 	/// nil = the sync may use this network. Otherwise a short reason in plain words (for the log and the screen).
 	/// Order: Low Power Mode, then (when either network switch is on) an unknown path, mobile data, a metered network, Low Data Mode.
+	/// This is the rule for a device WITHOUT the manual-transfer switch, which is every device until the user turns the switch on.
 	static func blockReason(flags: ConnectivityFlags, settings: ConnectivitySettings) -> String? {
+		return blockReason(flags: flags, settings: settings, device: DeviceNetworkPolicy())
+	}
+
+	/// The same rule for one device. When the device's exception applies (switch on, and the device does not share the photo back-up
+	/// folder) mobile data, a metered network and Low Data Mode do not stop it. Low Power Mode and an unknown network still stop it,
+	/// exactly as they stop every other device.
+	static func blockReason(flags: ConnectivityFlags, settings: ConnectivitySettings, device: DeviceNetworkPolicy) -> String? {
 		if settings.blockInLowPowerMode && flags.lowPowerMode {
 			return "Low Power Mode is on"
 		}
@@ -49,6 +59,10 @@ enum ConnectivityRules {
 			if !flags.pathKnown {
 				// Not known yet: stay off, just to be sure
 				return "the network is not known yet"
+			}
+			if device.exemptionApplies {
+				// Manual transfers: this device may use mobile data, a metered network and a Low Data Mode network
+				return nil
 			}
 			if flags.deviceHasCellular && settings.blockOnCellular && flags.usesCellular {
 				return "the phone uses mobile data"
@@ -61,6 +75,131 @@ enum ConnectivityRules {
 			}
 		}
 		return nil
+	}
+
+	/// True when the device may connect ONLY because of its switch: the normal rule blocks this network, the rule for this device does not.
+	static func exemptionIsLifting(flags: ConnectivityFlags, settings: ConnectivitySettings, device: DeviceNetworkPolicy) -> Bool {
+		return blockReason(flags: flags, settings: settings) != nil && blockReason(flags: flags, settings: settings, device: device) == nil
+	}
+
+	/// One line in plain words about one device whose switch is on, for the start screen, the device screen and the log.
+	/// nil = nothing to say (the switch is off, or this network is not blocked for anybody). `name` is the device's name.
+	static func deviceExceptionLine(name: String, flags: ConnectivityFlags, settings: ConnectivitySettings, device: DeviceNetworkPolicy) -> String? {
+		if device.switchIsIgnored {
+			return "\(name): the switch is ignored, because this device receives your photo back-up. Photos never use mobile data or a hotspot."
+		}
+		if !device.exemptionApplies {
+			return nil
+		}
+		if let why = blockReason(flags: flags, settings: settings, device: device) {
+			return "\(name): paused, because \(why)."
+		}
+		if blockReason(flags: flags, settings: settings) != nil {
+			return "\(name): allowed on this network (manual transfers)."
+		}
+		return nil
+	}
+
+	/// The lines for the start screen: what is paused and what is allowed. Empty when no device has the switch on, so that the screen then
+	/// shows what it always showed. `globalReason` is the answer of `blockReason(flags:settings:)` (nil = this network is not blocked).
+	static func statusLines(globalReason: String?, deviceLines: [String]) -> [String] {
+		if deviceLines.isEmpty {
+			return []
+		}
+		var lines: [String] = []
+		if let why = globalReason {
+			lines.append("Photo back-up and other devices: paused, because \(why).")
+		}
+		lines.append(contentsOf: deviceLines)
+		return lines
+	}
+}
+
+// MARK: - Per-device exception for manual transfers
+
+/// How the network rules treat ONE device. In the app the user can switch on "Allow on mobile data and hotspot (manual transfers only)"
+/// for a device (it is off for every device until the user turns it on). A device with the switch on is not stopped by mobile data, a
+/// metered network or Low Data Mode, so a file or a folder that the user sends by hand can travel on a hotspot too.
+/// FAIL-SAFE: the switch counts for nobody who shares the photo back-up folder, so the photos can never leave on a restricted network,
+/// even if the switch is set by mistake. Low Power Mode and an unknown network still stop every device.
+struct DeviceNetworkPolicy: Equatable, Sendable {
+	/// The user's switch for this device.
+	var allowsRestrictedNetworks: Bool = false
+	/// True when this device shares the photo back-up folder, or a folder that lies in or around it (see BackupFolderGuard).
+	var sharesBackupFolder: Bool = false
+
+	/// True when the device is exempt from the mobile data / metered / Low Data Mode rules.
+	var exemptionApplies: Bool {
+		return allowsRestrictedNetworks && !sharesBackupFolder
+	}
+
+	/// True when the switch is on but cannot be used, because the device shares the photo back-up folder.
+	var switchIsIgnored: Bool {
+		return allowsRestrictedNetworks && sharesBackupFolder
+	}
+}
+
+/// A Syncthing folder as the network rules need to see it.
+struct FolderShareInfo: Equatable, Sendable {
+	var id: String
+	/// Where the folder is on the phone ("" when that is not known).
+	var path: String
+	/// The IDs of the devices the folder is shared with.
+	var sharedWith: Set<String>
+}
+
+enum BackupFolderGuard {
+	/// The devices that share the photo back-up folder, or a folder whose path is the back-up folder's path, lies inside it or around it
+	/// (the back-up writes into the directory tree of its folder). The exception never applies to these devices.
+	/// `backupFolderID` is "" when no back-up folder has been chosen: then nobody shares it. The answer only gets bigger when more
+	/// folders overlap, so a wrong guess about a path can make the rule stricter but never looser.
+	static func devicesSharingBackup(backupFolderID: String, folders: [FolderShareInfo]) -> Set<String> {
+		if backupFolderID.isEmpty {
+			return []
+		}
+		guard let backup = folders.first(where: { $0.id == backupFolderID }) else {
+			return []
+		}
+		var devices = backup.sharedWith
+		for other in folders {
+			if other.id != backup.id && pathsOverlap(backup.path, other.path) {
+				devices.formUnion(other.sharedWith)
+			}
+		}
+		return devices
+	}
+
+	/// True when one path is the other, or lies inside the other. Compared folder by folder (so "/a/photos2" is not inside "/a/photos"),
+	/// without looking at upper or lower case, and with "." and ".." resolved. An empty path overlaps with nothing.
+	static func pathsOverlap(_ first: String, _ second: String) -> Bool {
+		let a = pathParts(first)
+		let b = pathParts(second)
+		if a.isEmpty || b.isEmpty {
+			return false
+		}
+		return a.starts(with: b) || b.starts(with: a)
+	}
+
+	static func pathParts(_ path: String) -> [String] {
+		var parts: [String] = []
+		for piece in path.components(separatedBy: "/") {
+			let part = piece.lowercased()
+			if part.isEmpty || part == "." {
+				continue
+			}
+			if part == ".." {
+				if !parts.isEmpty {
+					parts.removeLast()
+				}
+				continue
+			}
+			parts.append(part)
+		}
+		// "/private/var/..." and "/var/..." are the same place on an iPhone
+		if parts.count >= 2 && parts[0] == "private" && parts[1] == "var" {
+			parts.removeFirst()
+		}
+		return parts
 	}
 }
 
