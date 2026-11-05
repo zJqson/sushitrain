@@ -245,6 +245,50 @@ Undo: revert the fast-path commits, `git revert --no-edit 26326cc..HEAD` (26326c
   front (it reconnects at once) and the app process being ended. Only the second one needs a restart of the app.
 - A process that is killed (not swiped away) and then started by the App Shortcut "Back-up new photos" (Spotlight, search "PhotoTrain")
   is running again in the background after 7 seconds, holds the "Location subscription" assertion again and is connected to the PC.
+- **Swipe-away test (19:44, build 13, iOS 27.0.1).** The app was thrown away in the app switcher with a real swipe. SpringBoard logged
+  `killed from app switcher`, `User Initiated Quit (0xDEADFA11)` and runningboardd `user-quit`: the same lines as the 18:48:30 loss. iOS
+  did **not** start the app again by itself (watched 66 seconds: no connection to the PC). A fake location jump (the "significant
+  location change" trick, 4.5 s, another city) did not bring it back either. The same jump after a plain `kill` (not a swipe) started
+  the app in the background once (hold 4.4 s: `intent background` 0.1 s after the first fix) and failed in the other six tries, so
+  the trick is **not dependable** and nothing is built on it.
+- **Starting the app from the PC without showing it** (needs the USB cable, trust and Developer Mode). The developer launch call with the
+  extra option `ActivateSuspended = true` starts the app **in the background**: SpringBoard logs `Bootstrapping ... with intent background`,
+  the Home screen stays as it is, the PC sees the iPhone again after 1.0 s (screen on) or 1.5 s (phone locked), the silent sound and the
+  location keeper start, the blue location pill shows. The same call without the option is `intent foreground-interactive` (the app opens
+  in front). Rule used: **check first, send nothing when the app is alive**, and keep "show the app" a separate action:
+  ```python
+  # pip install pymobiledevice3 ; phone on USB, trusted, Developer Mode on. rsd = await establish_userspace_rsd()
+  async def start_in_background(rsd, bundle="com.jason.phototrain.WV85FMU43R"):
+      async with DvtProvider(rsd) as dvt:
+          async with DeviceInfo(dvt) as info:
+              if any(p.get("bundleIdentifier") == bundle for p in await info.proclist()):
+                  return "running: nothing sent"
+          async with ProcessControl(dvt) as pc:
+              await pc.launch(bundle_id=bundle, arguments=[], kill_existing=False, start_suspended=False,
+                              environment={}, extra_options={"ActivateSuspended": True})
+      return "started in the background"
+  ```
+  The ready tool is `phoneops.py` (`alive`, `start`, `show` = bring to front without restarting, `kill`, `launch`, `fakeloc`) next to this
+  work in `D:\HelperWork\fastpath2_20261104`. Open the app switcher from the PC with two quick Home presses (`switcher.py double-home`);
+  a swipe from the bottom edge is ignored by iOS when it comes over the cable.
+- **Installing a new build over a running copy stalls.** Sideloadly stuck at 88 % for 4 minutes while the old copy was running (iOS:
+  `installcoordinationd: Update skipped`); after `dvt kill` of the old process the install finished in 4 seconds. End the old app first.
+- **Heavy foreground apps:** Camera, Maps, Safari, Photos, Camera, Maps opened one after the other (about 60 s): the app stayed alive.
+- **Screen off, app alone (build 13, started from the PC in the background, phone locked and untouched).** A photo taken from the lock
+  screen (Camera opened by swiping left, the phone stays locked) reached the PC after **10.4 s** (phone locked 10 min), **9.6 s**
+  (30 min), **9.7 s** (60 min) and **10.1 s** (120 min). The same test on build 10, with the 8 s settle wait: 20.2 s with the phone locked and 17.8 s with the
+  screen on. Shortening the wait from 8 s to 3 s therefore saved about 10 s. The app was alive at every check (the last one 2 h 19 min
+  after its start) and the PC's Syncthing log shows no lost connection in that time (the last one was at 19:53:48, when the old copy was
+  ended before the start). Where the 9.7 s of the 60 minute photo went (phone's log, PC log): 4.2 s from the shutter
+  until Photos reports the new photo (`Photo library changed; the app is in the background`, an event: the observer fires with the screen
+  locked), 3.4 s settle wait, 0.7 s for the run (`path=fast (4 photos), I=1 U=4`), 1.5 s from the end of the run until the file is on the PC.
+  After every photo a second run follows 4 s later (`path=nothing to do`, 18 to 25 ms): Photos reports a small follow-up change.
+- **Cost of build 13 (phone's own counters, `dvt sysmon`, app alone, screen locked):** about 1.9 % of one CPU core, 31 to 36 wake-ups per
+  second and 44 to 48 MB of memory (growing about 0.05 MB per minute in the first 73 minutes, then flat: 47.9 MB at 21:12, 47.7 MB at 22:13).
+  The counters read at the four alive checks (cumulative CPU time and wake-ups) give 1.78 % and 30.8 wake-ups per second for 20:23 to 22:13
+  (the last hour: 1.71 % and 29.5). Build 10 was measured once, for 10 minutes: 0.7 %,
+  24 wake-ups per second, 35 MB, so this comparison is rough. The extra is probably the silent sound (the audio hardware wakes the app
+  about 10 times a second); the switch "Also play silence" turns it off. Not proven: an A/B test with the switch off, and the battery use.
 
 **What builds 12 and 13 change.**
 
@@ -256,7 +300,9 @@ Undo: revert the fast-path commits, `git revert --no-edit 26326cc..HEAD` (26326c
    (`Log.note`) and are also written to the phone's system log in clear text (subsystem `com.jason.phototrain`). They appear in Settings,
    Support, View log messages: scene changes, `Started; the app is in the background / in front; free memory ...`, memory warnings, photo
    library changes, the one line per photo run, silent-sound start/stop/interruption, and `Sync is off because ...` / `Sync is allowed ...`
-   whenever the network rules change their mind.
+   whenever the network rules change their mind. Caveat: for an app started in the background with the developer launch option above,
+   UIKit reports the app as *active*, so the start line can say `in front` although nothing is shown on the screen; the proof of a
+   background start is SpringBoard's `intent background` line and the unchanged screen.
 3. **"The app was not running from ... until ..."** is shown at the next start (and on the Background screen) when the gap since the last
    sign of life is more than 3 minutes. Signs of life are written only when something happens (scene change, photo run, memory warning, and
    the app's existing 50 second measurement timer, at most every 5 minutes): no new timer.
@@ -274,8 +320,9 @@ timer scans the library. The setting "Copy photos periodically in the background
 the changes of builds 12 and 13 adds a timer: the location keeper is event driven, the silent sound is driven by the audio hardware.
 
 **What iOS cannot do (honest list).** Nothing in the app can start itself after a swipe-away in the app switcher while iOS treats that as
-the user's decision; the keepers only help while the app is running. Under very high memory pressure iOS can still end any background
-app. A photo taken while the app is not running is picked up the next time the app runs (it looks at everything that changed since the
+the user's decision (measured: 66 s with no restart, and a fake location jump did not help); the keepers only help while the app is
+running. The only restart that was dependable is the one from the PC over the USB cable (above) or by hand (tap the app, or the
+App Shortcut "Back-up new photos" in Spotlight). Under very high memory pressure iOS can still end any background app. A photo taken while the app is not running is picked up the next time the app runs (it looks at everything that changed since the
 last good run). The app cannot be told by iOS to start when a photo is taken.
 
 **Never on a hotspot: the honest answer.** iOS marks the Personal Hotspot of an *iPhone* as "expensive", and the setting "On metered
@@ -323,6 +370,18 @@ compiler on hand: the build logs on the `build-logs` branch are its first compil
 names, big libraries, Live Photos, the look at all albums after a real change and the iOS kill/restart behaviour are all untested.
 
 The fast path ("Fast path for new photos") was also written without a compiler on hand. Its decision file is covered by the CI
-self-test; the Photos glue only compiled. Not run on a phone: what `PHPersistentChange` really lists for a new photo (photos, albums,
-smart albums), the lookup of the albums a changed photo is in (`PHAssetCollection.fetchAssetCollectionsContaining`), the fetch narrowed to the
-changed photos, the fallback rules and the timing (the log line shows it).
+self-test. **Update 2026-11-04:** it has since run on the phone (builds 11 to 13, iOS 27.0.1): a new Camera photo gives `path=fast
+(2 to 4 photos), I=1`, a run of 0.7 to 1.2 s, and the file is on the PC about 10 s after the shutter, with the screen off. Still not run on a
+phone: the fallback rules (an album that changed, more than the limit of photos, an unreadable change list) and the look at all albums
+after a real album change.
+
+**Not proven yet after round 2 (builds 12 and 13).**
+- A phone restart: after it the app runs only when someone starts it (or the PC watcher does, if the phone is on the cable and was
+  unlocked once). Not tested.
+- An app that is alive but frozen by iOS would look alive to the PC check (`alive` only reads the process list). Not seen so far.
+- Real memory pressure by big apps (games, video editors): only Camera, Maps, Safari and Photos were tried.
+- The battery use over a day, and the cost of the silent sound (A/B with the switch off).
+- Whether an app that was started in the background has a card in the app switcher: SpringBoard's log says no (every start in the front writes
+  `Adding SwitcherScene overlay` and `didAddExternalForegroundApplicationSceneHandle`; the five background starts wrote neither), but
+  the card list itself was not scrolled to look.
+- Starting the app from the PC works only while the phone is on the PC's USB cable.
