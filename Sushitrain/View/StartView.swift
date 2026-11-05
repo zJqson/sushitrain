@@ -210,8 +210,9 @@ private struct NetworkStatusView: View {
 					// is allowed (the lines come from ConnectivityRules.statusLines, see KeepAliveRules.swift)
 					Label {
 						VStack(alignment: .leading, spacing: 4) {
-							ForEach(appState.networkExceptionLines, id: \.self) { line in
-								Text(line)
+							// (by position: two devices with the same name and state give the same line twice)
+							ForEach(Array(appState.networkExceptionLines.enumerated()), id: \.offset) { item in
+								Text(item.element)
 							}
 						}
 					} icon: {

@@ -373,16 +373,21 @@ empty by default), like `userPausedDevices`. It is known before the core starts.
 uses, `lib/connections/service.go` and `lib/model/model.go`): the dial loop skips every paused device before it looks an address up
 (`if deviceCfg.Paused { continue }` comes before `resolveDialTargets` / the discovery lookup), so on a hotspot the core dials and looks up
 only the Drop device; a connection that comes in from a paused device is closed in `connectionCheckEarly` (`errDevicePaused`, after the TLS
-handshake told who it is); pausing a device closes its connection; unpausing one makes the dial loop run at once. What is NOT per device and
+handshake told who it is); pausing a device queues its connection to be closed (`CommitConfiguration` logs "Pausing device"; the closing code itself was not read);
+unpausing one makes the dial loop run at once (`checkAndSignalConnectLoopOnUpdatedDevices`). What is NOT per device and
 therefore the same as in build 15: the core's own listener, its announcements to the global discovery servers, relay and NAT/STUN
 keep-alives (the app's own switches in Settings, sections *Discovery* and *Network traversal*). No byte counts were measured (no phone, no hotspot).
 
 **Not proven.** A real hotspot, a real Drop device on the phone, and the behaviour of the core on mobile data with only the Drop device
-unpaused were not tried; the Swift code was written without a compiler and is checked by the CI (self-test step `keepalive`) and by a Python
+unpaused were not tried (on mobile data the iPhone's own setting Settings, Cellular, PhotoTrain must also allow the app; on 2026-11-04
+Cellular was Off, so only a hotspot Wi-Fi can carry the Drop device until that is changed; give the Drop device its own name, for
+example "Drop", so that the lines on the screen tell it from the main device); the Swift code was written without a compiler and is checked by the CI (self-test step `keepalive`) and by a Python
 model (`D:\HelperWork\devnet_20261105\model`, 20 planted mistakes all caught). Known limits: a folder share that arrives without any screen of
 the app being used (an *introducer* device, keep that switch off) is noticed at the next start, network change or setting change, not at
-once, because the core's events do not reach the app in the background and a timer is not allowed; two decisions that run at the same moment
-(the same race as in build 15) each use the state they saw.
+once, because the core's events do not reach the app in the background and a timer is not allowed (in the Python model of the decision, 240,000
+random events, such a hidden share left a back-up device unpaused on a blocked network in 91 steps, never longer than 2 events; in real use
+it lasts until the next start, network change, Low Power Mode change, setting or share action, which can be hours on one stable network);
+two decisions that run at the same moment (the same race as in build 15) each use the state they saw.
 
 ## Self-test in the build
 
