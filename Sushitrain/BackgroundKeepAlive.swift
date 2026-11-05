@@ -154,6 +154,8 @@
 			Log.info("Keep-alive: iOS woke us with a location event (position not read)")
 			// A wake-up is a good moment to look for photos that arrived while we were frozen
 			appState.autoPhotoBackup.schedule(reason: "location event")
+			// ... and to start the silent sound again if it stopped and every new try failed (does nothing while it plays)
+			updateAudio()
 		}
 
 		fileprivate func locationFailed(_ message: String) {
@@ -302,8 +304,9 @@
 	/// background and it is among the last to be closed. The sound is mixed with other apps' sound (music, calls and videos keep playing)
 	/// and nothing can be heard. Costs a little battery. "audio" is already in UIBackgroundModes. Event driven: no timer.
 	///
-	/// A start that fails (for example in a launch in the background, where iOS refuses a new audio session) is tried again the next time
-	/// BackgroundKeepAlive.apply() runs, which is every time the app comes to the front.
+	/// A start that fails (for example in a launch in the background, where iOS refuses a new audio session) is tried again 3 times (after
+	/// 3 s, 20 s and 90 s, one waiting task each), and then the next time BackgroundKeepAlive.apply() runs (every time the app comes to the
+	/// front) or the location session wakes the app.
 	@MainActor final class SilentAudioKeeper: NSObject {
 		private(set) var isRunning = false
 		private(set) var lastProblem: String? = nil
@@ -313,11 +316,28 @@
 		private var player: AVAudioPlayerNode? = nil
 		private var observing = false
 		private var lastStart = Date.distantPast
+		/// A start request that was refused or failed is tried again by ONE waiting task (never a repeating timer).
+		private var retryTask: Task<Void, Never>? = nil
+		private var failedStarts = 0
+		/// Waits (seconds) before the 1st, 2nd and 3rd new try after a start that failed. After that the keeper waits for the next
+		/// event (the app in front, a wake-up from the location session), see BackgroundKeepAlive.locationEventReceived.
+		private static let retryDelays: [Double] = [3, 20, 90]
 
 		func start() {
-			if isRunning { return }
-			// Do not start again and again when something keeps stopping the engine
-			if Date.now.timeIntervalSince(lastStart) < 1 { return }
+			if isRunning {
+				// The flag says "playing": make sure the engine agrees (iOS can stop an engine without telling us)
+				if let running = engine, !running.isRunning {
+					restart("the audio engine had stopped")
+				}
+				return
+			}
+			// Do not start again and again when something keeps stopping the engine. A request inside that second is NOT dropped:
+			// restart() has already taken the old engine down, so dropping it would leave the silent sound off until the app is next
+			// in front (nothing else starts it again). It is tried once more just after the guard time.
+			if Date.now.timeIntervalSince(lastStart) < 1 {
+				scheduleRetry(after: 1.2)
+				return
+			}
 			lastStart = Date.now
 			do {
 				let session = AVAudioSession.sharedInstance()
@@ -363,6 +383,7 @@
 				player = newPlayer
 				isRunning = true
 				lastProblem = nil
+				failedStarts = 0
 				addObservers()
 				Log.note("Keep-alive: silent sound started")
 				onChange?()
@@ -373,6 +394,9 @@
 		}
 
 		func stop(reason: String) {
+			retryTask?.cancel()
+			retryTask = nil
+			failedStarts = 0
 			let wasRunning = isRunning
 			player?.stop()
 			engine?.stop()
@@ -393,10 +417,27 @@
 			lastProblem = text
 			isRunning = false
 			onChange?()
+			// A start that failed (for example right after a phone call or Siri, when iOS still refuses a new audio session in the
+			// background) is tried again up to three times with growing waits; each try is one waiting task, not a timer.
+			if failedStarts < Self.retryDelays.count {
+				scheduleRetry(after: Self.retryDelays[failedStarts])
+				failedStarts += 1
+			}
+		}
+
+		private func scheduleRetry(after seconds: Double) {
+			guard retryTask == nil else { return }
+			retryTask = Task { [weak self] in
+				try? await Task.sleep(for: .seconds(seconds))
+				guard let self, !Task.isCancelled else { return }
+				self.retryTask = nil
+				self.start()
+			}
 		}
 
 		private func restart(_ why: String) {
 			Log.note("Keep-alive: silent sound restarts (\(why))")
+			failedStarts = 0  // every event that asks for a restart gets its own three new tries
 			player?.stop()
 			engine?.stop()
 			player = nil
