@@ -64,8 +64,10 @@ enum PhotoRunOutcome: Equatable, Sendable {
 
 enum PhotoChangePlanner {
 	/// Seconds the automatic back-up waits after the LAST change in the photo library (a burst of photos, or a Live Photo that is still
-	/// being finished, keeps restarting the wait).
-	static let defaultQuietSeconds = 8
+	/// being finished, keeps restarting the wait). 3 is the smallest allowed value; it was 8 in builds 8 to 11 and 20 before the fast path.
+	/// A file is never read half-written: Photos reports an added photo only when it is saved, and a photo whose Live Photo video is
+	/// attached a moment later is changed (and therefore looked at) again, see PhotoChangePlanner.fastPassOutcome.
+	static let defaultQuietSeconds = 3
 	static let minQuietSeconds = 3
 	static let maxQuietSeconds = 120
 	/// Most photos the fast path looks at; more than that and the whole library is looked at. 0 switches the fast path off.

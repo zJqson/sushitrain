@@ -172,7 +172,8 @@ struct PhotoChangeSelfTest {
 		expectTrue(PhotoChangePlanner.assetsToLookAt(sample) == ["A", "B", "C"], "assetsToLookAt")
 
 		// ---- 9. The two settings -------------------------------------------------------------------------------------------------
-		expectInt(PhotoChangePlanner.defaultQuietSeconds, 8, "the default wait is 8 seconds")
+		expectInt(PhotoChangePlanner.defaultQuietSeconds, 3, "the default wait is 3 seconds")
+		expectInt(PhotoChangePlanner.clampQuietSeconds(PhotoChangePlanner.defaultQuietSeconds), PhotoChangePlanner.defaultQuietSeconds, "the default wait is inside the allowed range")
 		expectInt(PhotoChangePlanner.defaultFastPathMaxAssets, 200, "the default limit is 200 photos")
 		expectInt(PhotoChangePlanner.clampQuietSeconds(8), 8, "wait 8")
 		expectInt(PhotoChangePlanner.clampQuietSeconds(3), 3, "wait 3")

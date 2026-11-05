@@ -228,7 +228,7 @@
 	/// (the "fast path", see PhotoChangePlan.swift). isInBackground is always true, which keeps PhotoBackup from ever
 	/// deleting originals ("Remove saved photos from source" only runs from the foreground button).
 	///
-	/// The wait is the setting photoBackupQuietSeconds (PhotoBackup.quietSeconds: default 8 s, 3...120 s).
+	/// The wait is the setting photoBackupQuietSeconds (PhotoBackup.quietSeconds: default 3 s, 3...120 s).
 	@MainActor final class AutoPhotoBackup: NSObject, PHPhotoLibraryChangeObserver {
 		private unowned let appState: AppState
 		private var registered = false
@@ -290,7 +290,7 @@
 				return
 			}
 
-			Log.note("Auto photo backup: starting (\(reason))")
+			Log.note("Auto photo backup: starting (\(reason)); settle wait was \(photoBackup.quietSeconds) s")
 			photoBackup.backup(appState: appState, fullExport: false, isInBackground: true)
 		}
 	}
@@ -322,6 +322,8 @@
 			do {
 				let session = AVAudioSession.sharedInstance()
 				try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+				// Nothing is played that needs a short delay, so ask for the longest buffer: fewer wake-ups per second, less battery
+				try? session.setPreferredIOBufferDuration(0.2)
 				try session.setActive(true)
 
 				guard let format = AVAudioFormat(standardFormatWithSampleRate: 8000, channels: 1),

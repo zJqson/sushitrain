@@ -199,7 +199,7 @@ iCloud):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `photoBackupQuietSeconds` | 8 (was a fixed 20) | Seconds the app waits after the LAST change in the library before it runs. Used range 3 to 120. Every new change restarts the wait, so a burst of photos or a Live Photo that Photos is still finishing is not exported half-written. |
+| `photoBackupQuietSeconds` | 3 (8 in builds 8 to 12; a fixed 20 before) | Seconds the app waits after the LAST change in the library before it runs. Used range 3 to 120. Every new change restarts the wait, so a burst of photos or a Live Photo that Photos is still finishing is not exported half-written. |
 | `photoBackupFastPathMaxAssets` | 200 | Most changed photos the fast path takes. More than that means a full pass. 0 switches the fast path off (always the full pass, as in build 7). Used range 0 to 5000. |
 
 **The log.** *Settings, Support, View log messages* has one line per run in album mode, written when the run ends (also after an
@@ -231,27 +231,28 @@ with `Photo back-up run`. On the PC the photo appears in the `No album` folder (
 Undo: revert the fast-path commits, `git revert --no-edit 26326cc..HEAD` (26326cc is the build-7 commit just before them), and push with
 `push_fork.ps1`. The setting `photoBackupFastPathMaxAssets` = 0 would also switch the fast path off, but it has no screen yet.
 
-## Staying alive in the background, screen off (build 11)
+## Staying alive in the background, screen off (builds 12 and 13)
 
 **What was measured on the real iPhone (iOS 27.0.1), with the phone's own system log read over USB.**
 
 - With the screen locked and nothing else running, the app lived at least 33 minutes in the background (22 of them with the screen locked)
   and held the iOS "Location subscription" assertion; it used 69 MB of memory and about 2 % CPU. So **the screen being off does not stop it.**
-- The loss at 18:48:30 was a **force-quit**, not iOS freezing the app: SpringBoard logged `killed from app switcher`, exception code
-  `User Initiated Quit (0xDEADFA11)`. A person had woken the screen, opened the app switcher and swiped the card away. There is no crash
-  report and no jetsam report. **iOS never starts a force-quit app again by itself** (no location event, no background refresh) until
-  somebody opens it. No app can change that.
+- The loss at 18:48:30 was a **swipe-away in the app switcher**, not iOS freezing the app: SpringBoard logged `killed from app switcher`,
+  exception code `User Initiated Quit (0xDEADFA11)`. There is no crash report and no jetsam report.
 - The earlier loss at 18:00:40 happened while a big foreground app (Facebook) was being used; nothing was logged on the phone at that
   time, so a memory kill by that big app is possible but not proven.
-- The log lines of the Syncthing connection on the PC show two kinds of "Lost device connection ... forcibly closed": the app being
-  brought to the front (it reconnects at once) and the app process being ended.
+- The two "Lost device connection ... forcibly closed" lines of the PC's Syncthing log mean different things: the app being brought to the
+  front (it reconnects at once) and the app process being ended. Only the second one needs a restart of the app.
+- A process that is killed (not swiped away) and then started by the App Shortcut "Back-up new photos" (Spotlight, search "PhotoTrain")
+  is running again in the background after 7 seconds, holds the "Location subscription" assertion again and is connected to the PC.
 
-**What build 11 changes.**
+**What builds 12 and 13 change.**
 
 1. **Second keeper: an inaudible sound** (Settings, Background synchronization, "Also play silence", on by default; "audio" was already in
    `UIBackgroundModes`). iOS treats an app that plays sound like a music player: it is closed last when memory runs low. It is mixed with
-   other apps' sound, so music, calls and videos are not interrupted. It costs a little battery. The status line says `Silent sound: playing`.
-2. **Visible log lines.** The core keeps only warnings unless "Enable debug logging" is on, so lines that matter now use warning level
+   other apps' sound, so music, calls and videos are not interrupted. It asks for the longest audio buffer (fewer wake-ups) and costs a
+   little battery. The status line says `Silent sound: playing`. There is no timer in it: the audio hardware drives it.
+2. **Visible log lines.** The core keeps only warnings unless "Enable debug logging" is on, so the lines that matter now use warning level
    (`Log.note`) and are also written to the phone's system log in clear text (subsystem `com.jason.phototrain`). They appear in Settings,
    Support, View log messages: scene changes, `Started; the app is in the background / in front; free memory ...`, memory warnings, photo
    library changes, the one line per photo run, silent-sound start/stop/interruption, and `Sync is off because ...` / `Sync is allowed ...`
@@ -262,27 +263,20 @@ Undo: revert the fast-path commits, `git revert --no-edit 26326cc..HEAD` (26326c
 4. **The network rules are now a tested pure file** (`Sushitrain/KeepAliveRules.swift`, CI self-test step `keepalive`). Behaviour is the same
    as before: the sync is off in Low Power Mode (if that switch is on), when the network is not known, on mobile data, on a metered
    (expensive) network and when Low Data Mode is on for the network. The shipped settings are: mobile data blocked, metered blocked.
-5. **The two Shortcuts actions "Back-up new photos" and "Synchronize for a while" may run while the phone is locked**
-   (`authenticationPolicy = .alwaysAllowed`), so a Shortcuts automation can use them with the screen off.
-6. A hint under the switch: do not swipe the app away in the app switcher.
+5. **The settle wait before an automatic run is 3 seconds** (build 13; it was 8 in builds 8 to 12 and 20 before the fast path). It is still
+   one wait that every new change in the photo library restarts, so a burst of photos is saved once, 3 seconds after the last one.
+6. The actions "Back-up new photos" and "Synchronize for a while" may run while the phone is locked (`authenticationPolicy = .alwaysAllowed`).
+7. A hint under the switch: do not swipe the app away in the app switcher.
 
-**Revival after a force-quit or any other end: a Shortcuts automation (create it on the iPhone yourself; the app cannot).**
-Shortcuts runs the app's actions even when the app is not running (it starts the app in the background), also after a force-quit,
-because you asked for it by creating the automation.
+**How a new photo is noticed.** By an event, not by looking: the app registers once as a `PHPhotoLibraryChangeObserver`; when Photos
+reports a change, one wait of 3 seconds starts (every further change restarts it), then the fast path looks at the new photo only. No
+timer scans the library. The setting "Copy photos periodically in the background" (a system-scheduled background task) is off, and none of
+the changes of builds 12 and 13 adds a timer: the location keeper is event driven, the silent sound is driven by the audio hardware.
 
-1. Shortcuts app, tab *Automation*, **+**, choose **App**. Pick **Camera**, tick **Is Closed** (untick *Is Opened*), choose **Run Immediately**,
-   *Next*, *New Blank Automation*.
-2. *Add Action*, search **PhotoTrain**, choose **Back-up new photos**. Add a second action: **Synchronize for a while**, set the time to
-   **15** seconds (the most the action allows). Turn *Notify When Run* off. *Done*.
-3. Optional second automation, trigger **Charger**, **Is Connected**, *Run Immediately*, the same two actions (catches up after a night).
-4. Optional third automation, trigger **Time of Day** 03:00, *Daily*, *Run Immediately*, action **Synchronize for a while** (15 s).
-
-The network rules of the app still apply inside these runs (mobile data, metered networks and Low Data Mode stay blocked).
-
-**What iOS cannot do (honest list).** It cannot restart a force-quit app by itself. It cannot be told to start the app when a photo is
-taken (only the Camera-closed automation above comes close, and it only sees photos taken with the Camera app; a screenshot or a photo
-saved by another app is picked up the next time the app runs). The silent sound and the location session make it unlikely that iOS ends
-the app, but they cannot make it impossible: under very high memory pressure iOS can still end any background app.
+**What iOS cannot do (honest list).** Nothing in the app can start itself after a swipe-away in the app switcher while iOS treats that as
+the user's decision; the keepers only help while the app is running. Under very high memory pressure iOS can still end any background
+app. A photo taken while the app is not running is picked up the next time the app runs (it looks at everything that changed since the
+last good run). The app cannot be told by iOS to start when a photo is taken.
 
 **Never on a hotspot: the honest answer.** iOS marks the Personal Hotspot of an *iPhone* as "expensive", and the setting "On metered
 networks" blocks it. An *Android* hotspot (for example a Samsung S10) is not marked by iOS: the app sees normal Wi-Fi. The only
@@ -291,7 +285,6 @@ on, done once when the iPhone first joins it): the app then sees `constrained` a
 network`. Not built, because it cannot be done reliably: guessing a hotspot from its address range (an Android hotspot often uses
 192.168.43.x but not always), and allowing only named home networks (reading the Wi-Fi name needs an entitlement a free Apple ID does not
 have). Syncing only when the PC is on the same local network would block every hotspot, but it also blocks every public Wi-Fi.
-
 
 ## Self-test in the build
 
